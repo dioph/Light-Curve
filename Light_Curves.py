@@ -51,7 +51,7 @@ lc.read('\plot.tbl', cwd)  # KIC 7447200 light curve
 
 # fourier transform [DCDFT]
 
-xf, yf = fourier(lc)
+xf, yf = lc.fourier()
 plt.plot(xf, 2/lc.N * np.abs(yf[:lc.N/2]))
 
 plt.figure()
