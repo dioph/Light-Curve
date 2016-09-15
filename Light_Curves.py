@@ -1,4 +1,4 @@
-#from __future__ import print_function
+from __future__ import print_function
 import warnings, numpy as np, matplotlib.pyplot as plt
 warnings.filterwarnings("ignore")
 from astropy.visualization import astropy_mpl_style
@@ -11,16 +11,17 @@ import lc_io
 #import tkinter as tk    # GUI
 
 class LightCurve(object):
-    def __init__(self, tbl, N=0, T=0, xcol='time', ycol='sap_flux'):
-        self.tbl = tbl
-        self.N = N
+    def __init__(self, T=0, N=0, hdulist=None, tbl=None, xcol=None, ycol=None):
         self.T = T
+        self.N = N
+        self.hdulist = hdulist
+        self.tbl = tbl
         self.xcol = xcol
         self.ycol = ycol
 
     def fourier(self):
         xf = np.linspace(0.0, 1/(2.0*self.T), self.N/2)
-        yf = fftpack.fft(self.tbl[self.ycol])
+        yf = fftpack.fft(self.ycol)
         return xf, yf
 
 def init():
@@ -28,12 +29,21 @@ def init():
     return getcwd()  # current working directory
 
 # I/O
-
 cwd = init()
-# KIC 007447200 light curve
-hdulist = lc_io.read('http://archive.stsci.edu/pub/kepler/lightcurves/0074/007447200/kplr007447200-2009166043257_llc.fits')
-lc = LightCurve(tbl=lc_io.extract(hdulist[1]))
 
+lc_io.clock('Program initialized')
+
+# KIC 007447200 light curve
+lc = LightCurve()
+arq = input('Please insert file name: ')
+lc.hdulist = lc_io.read(arq)
+lc.tbl = lc_io.extract(lc.hdulist[1])
+lc.T = lc_io.median_cadence(lc.hdulist)[3]
+lc.N = len(lc.tbl.field(0))
+lc.xcol = lc_io.timecol(lc.tbl)
+lc.ycol = lc_io.fluxcol(lc.tbl)
+
+lc_io.clock('Finished creating LightCurve() object')
 # interpolate data to a uniform sampling [CDA]
 
 '''
@@ -43,14 +53,20 @@ lc = LightCurve(tbl=lc_io.extract(hdulist[1]))
 '''
 
 # fourier transform [DCDFT]
+
 '''
 xf, yf = lc.fourier()
 plt.plot(xf, 2/lc.N * np.abs(yf[:lc.N/2]))
 
 plt.figure()
 '''
-lc_io.plot(lc.tbl[lc.xcol], lc.tbl[lc.ycol], xlabel='Time ['+lc.tbl.columns[lc.xcol].unit+']', ylabel='Flux ['+lc.tbl.columns[lc.ycol].unit+']')
 
+lc_io.plot(lc.xcol, \
+           lc.ycol, \
+           xlabel='Time ['+lc.tbl.columns['time'].unit+']', \
+           ylabel='Flux [e-/s]')
+
+lc_io.clock('Finished plotting')
 plt.show()
 
 # get rid of white noise [CLEANEST]
