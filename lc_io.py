@@ -1,139 +1,93 @@
 from astropy.io import fits
 from astropy.visualization import astropy_mpl_style
-import matplotlib.pyplot as plt, matplotlib.ticker as ticker, numpy as np, time, re, os
+import matplotlib.pyplot as plt, numpy as np, time, os, scipy.optimize as sci
+import lc_tpf, lc_fourier
 
-# prints error messages
+# imprime mensagens de erro
 def error(msg):
     print('ERROR - '+msg)
     os.system("pause")
 
-# write message with current time
+# escreve mensagem com o horario atual
 def clock(msg=''):
     print(msg + ': ' + time.asctime(time.localtime()))
 
-# open FITS file and returns hdulist
-def open(arq, mode=None):
+# abre arquivo FITS e retorna a HDUlist
+def abrir(arq, modo=None):
     try:
-        hdulist = fits.open(arq, mode)
+        hdulist = fits.open(arq, modo)
     except:
         hdulist = None
-        error('Error reading FITS file: '+arq)
+        error('Erro lendo FITS: '+str(arq))
     return hdulist
 
-# closes FITS file
-def close(hdulist):
+# fecha arquivo FITS
+def fechar(hdulist):
     try:
         hdulist.close()
     except:
-        error('Cannot close HDU list')
+        error('Nao foi possivel fechar FITS')
 
-# extracts data table from HDU
-def extract(hdu):
+# extrai tabela de dados de uma HDU
+def extrair(hdu):
     try:
         tbl = hdu.data
     except:
         tbl = None
-        error('Error extracting table from '+arq)
+        error('Erro extraindo dados de '+arq)
     return tbl
 
-# returns column from data table
-def getcol(tbl, colname):
+# retorna coluna de uma tabela de dados
+def getcol(tbl, coluna):
     try:
-        col = tbl.field(colname)
+        col = tbl.field(coluna)
     except:
-        error('Could not find '+colname.upper()+' column')
+        error('Nao foi possivel encontrar a coluna '+coluna.upper())
         col = None
     return col
 
-# returns 'TIME' column from data table
+# retorna coluna 'TIME' de uma tabela de dados
 def timecol(tbl):
     try:
-        col = tbl.field('time')
+        col = tbl.field('TIME')
     except:
-        error('Could not find TIME column')
+        error('Nao foi possivel encontrar a coluna TIME')
         col = None
     return col
 
-# returns 'SAP_FLUX' or 'AP_RAW_FLUX' column from data table
+# retorna coluna 'SAP_FLUX' ou 'AP_RAW_FLUX' de uma tabela de dados
 def fluxcol(tbl):
     try:
-        col = tbl.field('sap_flux')
+        col = tbl.field('SAP_FLUX')
     except:
         try:
-            col = tbl.field('ap_raw_flux')
+            col = tbl.field('AP_RAW_FLUX')
         except:
-            error('Could not find any SAP Flux column')
+            error('Nao foi possivel encontrar a coluna SAP_FLUX')
             col = None
     return col
 
-# writes a fits file from hdu to arq
-def writefits(hdu, arq):
+# insere uma palavra-chave na HDU
+def newrow(nome, valor, comentario, hdu):
     try:
-        hdu.writeto(arq)
+        hdu.header.update(nome.upper(), valor, comentario)
     except:
-        error('Cannot create FITS file: '+arq)
+        error('Nao foi possivel criar '+nome.upper())
 
-# gets time diff info from hdulist
-def median_cadence(hdulist):
+# retorna valor de uma palavra-chave de uma HDU
+def getrow(hdu, nome):
     try:
-        times = hdulist[1].data.field('barytime')
+        val = hdu.header[nome]
     except:
-        times = getcol(hdulist[1].data, 'time')
-    dt = []
-    for i in range(1, len(times)):
-        if np.isfinite(times[i]) and np.isfinite(times[i-1]):
-            dt.append(times[i]-times[i-1])
-    dt = np.array(dt, dtype='float32')
-    cd = np.median(dt) * 86400.0
-    return times[0], times[-1], len(times), cd
-
-# inserts a keyword to a HDU
-def newrow(name, value, comment, hdu):
-    try:
-        hdu.header.update(name, value, comment)
-    except:
-        error('Cannot create '+name.upper()+' keyword')
-
-# returns value from a keyword of a HDU
-def getrow(hdu, name):
-    try:
-        val = hdu.header[name]
-    except:
-        error('Cannot read '+name.upper()+'keyword')
+        error('Nao foi possivel ler '+nome.upper())
         val = None
     return val
 
-# filters out NaN values from timecol and fluxcol
-def filternan(hdulist, ycol):
-    try:
-        isclean = hdulist[1].header['NANCLEAN']
-    except:
-        new_size = 0
-        for i in range(len(hdulist[1].columns.names)):
-            if 'time' in hdulist[1].columns.names[i].lower():
-                xcol = hdulist[1].columns.names[i]
-        try:
-            hdulist[1].data.field(ycol)
-        except:
-            error('Cannot find '+ycol.upper()+' column')
-        else:
-            try:
-                for i in range(len(hdulist[1].data.field(0))):
-                    if str(hdulist[1].data.field(xcol)[i]) != '-inf' and str(hdulist[1].data.field(ycol)[i]) != '-inf':
-                        hdulist[1].data[new_size] = hdulist[1].data[i]
-                        new_size += 1
-                hdulist[1].data = hdulist[1].data[:new_size]
-                comment = 'NaN cadences removed from data'
-                newrow('NANCLEAN', True, comment, hdulist[1])
-            except:
-                error('Failed to filter NaN cadences')
-    return hdulist
-
-# read time keywords from hdulist
+# le palavras-chave de tempo da HDUlist
 def time_info(hdulist):
-    tstart = 0.0
-    tstop = 0.0
-    cd = 0.0
+    inicio = 0.0
+    fim = 0.0
+    cad = 0.0
 ### BJDREF
     try:
         bjdrefi = hdulist[1].header['BJDREFI']
@@ -146,206 +100,68 @@ def time_info(hdulist):
     bjdref = bjdrefi + bjdreff
 ### TSTART
     try:
-        tstart = hdulist[1].header['TSTART']
+        inicio = hdulist[1].header['TSTART']
     except:
         try:
-            tstart = hdulist[1].header['STARTBJD'] + 2.4e6
+            inicio = hdulist[1].header['STARTBJD'] + 2.4e6
         except:
             try:
-                tstart = hdulist[0].header['LC_START'] + 2400000.5
+                inciio = hdulist[0].header['LC_START'] + 2400000.5
             except:
-                error('Cannot find TSTART')
-    tstart += bjdref
+                error('Nao foi possivel encontrar TSTART')
+    inicio += bjdref
 ### TSTOP
     try:
-        tstop = hdulist[1].header['TSTOP']
+        fim = hdulist[1].header['TSTOP']
     except:
         try:
-            tstop = hdulist[1].header['ENDBJD'] + 2.4e6
+            fim = hdulist[1].header['ENDBJD'] + 2.4e6
         except:
             try:
-                tstop = instr[0].header['LC_END'] + 2400000.5
+                fim = instr[0].header['LC_END'] + 2400000.5
             except:
-                error('Cannot find TSTOP')
-    tstop += bjdref
+                error('Nao foi possivel encontrar TSTOP')
+    fim += bjdref
 ### OBSMODE
-    cd = 1.0
+    cad = 1.0
     try:
-        mode = hdulist[0].header['OBSMODE']
+        modo = hdulist[0].header['OBSMODE']
     except:
         try:
-            mode = hdulist[1].header['DATATYPE']
+            modo = hdulist[1].header['DATATYPE']
         except:
-            error('Cannot find OBSMODE')
-    if 'short' in mode:
-        cd = 54.1782
-    elif 'long' in mode:
-        cd = 1625.35
+            error('Nao foi possivel encontrar OBSMODE')
+    if 'short' in modo:
+        cad = 54.178
+    elif 'long' in modo:
+        cad = 1625.35
 
-    return tstart, tstop, bjdref, cd
+    return inicio, fim, bjdref, cad
 
-# get World Coordinate System keywords
-def getwcs(hdu):
-    pix1 = 0.0
-    pix2 = 0.0
-    val1 = 0.0
-    val2 = 0.0
-    delta1 = 0.0
-    delta2 = 0.0
-    try:
-        pix1 = getrow(hdu, 'CRPIX1P')
-    except:
-        error('Cannot read keyword CRPIX1P')
-    try:
-        pix2 = getrow(hdu, 'CRPIX2P')
-    except:
-        error('Cannot read keyword CRPIX2P')
-    try:
-        val1 = getrow(hdu, 'CRVAL1P')
-    except:
-        error('Cannot read keyword CRVAL1P')
-    try:
-        val2 = getrow(hdu, 'CRVAL2P')
-    except:
-        error('Cannot read keyword CRVAL2P')
-    try:
-        delta1 = getrow(hdu, 'CDELT1P')
-    except:
-        error('Cannot read keyword CDELT1P')
-    try:
-        delta2 = getrow(hdu, 'CDELT2P')
-    except:
-        error('Cannot read keyword CDELT2P')
-    return pix1, pix2, val1, val2, delta1, delta2
+# plot customizavel
+def plot(arq, yname, quality=True, ylabel='e$^-$ s$^{-1}$', fill='y'):
+    '''
+    plot customizavel:
 
-# calculate coordinate from WCS
-def wcs(i, pix, val, delta):
-    return val + (float(i + 1) - pix) * delta
+    arq:     arquivo FITS
+    yname:   nome da coluna com dados de fluxo
+    quality: True se usuario quiser ignorar cadencias onde a qualidade dos dados é questionavel, False caso contrario
+    ylabel:  label do eixo y; default = 'e$^-$ s$^{-1}$'
+    fill:    cor do preenchimento
+    '''
 
-# reads target pixel data file
-def readTPF(arq, name):
-    tpf = open(arq, 'readonly')
-
-    try:
-        id = str(tpf[0].header['KEPLERID'])
-    except:
-        error('No KEPLERID keyword in ' + arq)
-    try:
-        ch = str(tpf[0].header['CHANNEL'])
-    except:
-        error('No CHANNEL keyword in ' + arq)
-    try:
-        sky = str(tpf[0].header['SKYGROUP'])
-    except:
-        error('No SKYGROUP keyword in ' + arq)
-    try:
-        mod = str(tpf[0].header['MODULE'])
-    except:
-        error('No MODULE keyword in ' + arq)
-    try:
-        out = str(tpf[0].header['OUTPUT'])
-    except:
-        error('No OUTPUT keyword in ' + arq)
-    try:
-        qt = str(tpf[0].header['QUARTER'])
-    except:
-        error('No QUARTER keyword in ' + arq)
-    try:
-        s = str(tpf[0].header['SEASON'])
-    except:
-        s = '0'
-    try:
-        ra = str(tpf[0].header['RA_OBJ'])
-    except:
-        error('No RA_OBJ keyword in ' + arq)
-    try:
-        dec = str(tpf[0].header['DEC_OBJ'])
-    except:
-        error('No DEC_OBJ keyword in ' + arq)
-    try:
-        mag = str(float(tpf[0].header['KEPMAG']))
-    except:
-        mag = ''
-    try:
-        dim = tpf['TARGETTABLES'].header['TDIM5']
-        xdim = int(dim.strip().strip('(').strip(')').split(',')[0])
-        ydim = int(dim.strip().strip('(').strip(')').split(',')[1])
-    except:
-        error('Cannot read TDIM5 keyword in ' + arq)
-    try:
-        col = tpf['TARGETTABLES'].header['1CRV5P']
-    except:
-        error('Cannot read 1CRV5P keyword in ' + arq)
-    try:
-        row = tpf['TARGETTABLES'].header['2CRV5P']
-    except:
-        error('Cannot read 2CRV5P keyword in ' + arq)
-    try:
-        data = tpf['TARGETTABLES'].data.field(name)[:]
-    except:
-        error('Cannot read '+name+' column in '+arq)
-        data = None
-    close(tpf)
-    if len(np.shape(data)) == 3:
-        data = np.reshape(data, (np.shape(data)[0], np.shape(data)[1]*np.shape(data)[2]))
-    return id, ch, sky, mod, out, qt, s, ra, dec, mag, xdim, ydim, col, row, data
-
-# read target pixel mask data
-def read_mask(arq):
-    tpf = open(arq, 'readonly')
-    try:
-        img = tpf['APERTURE'].data
-    except:
-        error('Cannot read mask definition in '+arq)
-    try:
-        size1 = tpf['APERTURE'].header['NAXIS1']
-    except:
-        error('Cannot read NAXIS1 keyword from '+arq)
-    try:
-        size2 = tpf['APERTURE'].header['NAXIS2']
-    except:
-        error('Cannot read NAXIS2 keyword from '+arq)
-    pix1, pix2, val1, val2, delta1, delta2 = getwcs(tpf['APERTURE'])
-    coord1 = np.zeros((size1, size2))
-    coord2 = np.zeros((size1, size2))
-    for j in range(size2):
-        for i in range(size1):
-            coord1[i,j] = wcs(i, pix1, val1, delta1)
-            coord2[i,j] = wcs(j, pix2, val2, delta2)
-    close(tpf)
-    return img, coord1, coord2
-
-# bitmap decoding
-def bit_in_bitmap(bitmap, bit):
-    for i in range(10,-1,-1):
-        if bitmap - 2**i >= 0:
-            bitmap -= 2**i
-            if 2**i == bit:
-                return True
-    return False
-
-####
-## customizable plot:
-##
-## arq:     FITS file
-## yname:   name of the column with flux data
-## quality: True if user wants to ignore cadences where the data quality is questionable, False otherwise
-## ylabel:  label of y axis; default='e$^-$ s$^{-1}$'
-## fill:    color of data filling within the plot
-####            
-def plot(arq, yname, quality=True, ylabel='e$^-$ s$^{-1}$', fill='#ffff00'):
     plt.style.use(astropy_mpl_style)
-### get input columns
-    hdulist = open(arq, mode='readonly')
-    tstart, tstop, bjdref, cd = time_info(hdulist)
-    tbl = extract(hdulist[1])
+### ler colunas de entrada
+    hdulist = abrir(arq, 'readonly')
+    inicio, fim, bjdref, cad = time_info(hdulist)
+    tbl = extrair(hdulist[1])
     xcol = timecol(tbl)
     xcol += bjdref
     ycol = getcol(tbl, yname)
-    qlty = getcol(tbl, 'SAP_QUALITY')
-    close(hdulist)
-### remove bad data
-    array = np.array([xcol, ycol, qlty], dtype='float64')
+    qcol = getcol(tbl, 'SAP_QUALITY')
+    fechar(hdulist)
+### remover lixo dos dados
+    array = np.array([xcol, ycol, qcol], dtype='float64')
     array = np.rot90(array, 3)
     array = array[~np.isnan(array).any(1)]
     array = array[~np.isinf(array).any(1)]
@@ -354,9 +170,9 @@ def plot(arq, yname, quality=True, ylabel='e$^-$ s$^{-1}$', fill='#ffff00'):
     timedata = np.array(array[:,2], dtype='float64')
     fluxdata = np.array(array[:,1], dtype='float32')
     if len(timedata) == 0:
-        error('Plotting arrays are full of NaN')
-### clean up
-    timeshift = float(int(tstart/100) * 100.0)
+        error('Arrays estao cheios de lixo')
+### organizar os eixos
+    timeshift = float(int(inicio/100) * 100.0)
     timedata -= timeshift
     xlabel = 'BJD $-$ %d' % timeshift
 
@@ -365,24 +181,22 @@ def plot(arq, yname, quality=True, ylabel='e$^-$ s$^{-1}$', fill='#ffff00'):
         exp = len(str(int(np.nanmax(fluxdata)))) - 1
     except:
         exp = 0
-    fluxdata /= 10**exp
+    fluxdata /= (10**exp)
     if 'e$^-$ s$^{-1}$' in ylabel or 'default' in ylabel:
         if exp == 0:
             ylabel = 'e$^-$ s$^{-1}$'
         else:
             ylabel = '10$^{%d}$ e$^-$ s$^{-1}$' % exp
-    else:
-        ylabel = re.sub('_', '-', ylabel)
-### limits
+### limites
     xmin = float(np.nanmin(timedata))
     xmax = float(np.nanmax(timedata))
     ymin = float(np.nanmin(fluxdata))
     ymax = float(np.nanmax(fluxdata))
-    xr = xmax - xmin
-    yr = ymax - ymin
-    timedata = np.insert(timedata, [0], [timedata[0]])
+    dx = (xmax - xmin) * 0.01
+    dy = (ymax - ymin) * 0.01
+    timedata = np.insert(timedata, 0, timedata[0])
     timedata = np.append(timedata, timedata[-1])
-    fluxdata = np.insert(fluxdata, [0], -10000.0)
+    fluxdata = np.insert(fluxdata, 0, -10000.0)
     fluxdata = np.append(fluxdata, -10000.0)
 ### plot
     plt.figure(figsize=[16,8])
@@ -390,23 +204,23 @@ def plot(arq, yname, quality=True, ylabel='e$^-$ s$^{-1}$', fill='#ffff00'):
     subtime = np.array([], dtype='float64')
     subflux = np.array([], dtype='float32')
     dt = 0
-    delta = 2.0 * cd / 86400
+    deltamax = 2.0 * cad / 86400
     for i in range(1, len(fluxdata)-1):
         dt = timedata[i] - timedata[i-1]
-        if dt < delta:
+        if dt < deltamax:
             subtime = np.append(subtime, timedata[i])
             subflux = np.append(subflux, fluxdata[i])
         else:
-            plt.plot(subtime, subflux, 'b-')
+            plt.plot(subtime, subflux, 'b-', linewidth=1.0)
             subtime = np.array([], dtype='float64')
             subflux = np.array([], dtype='float32')
-    plt.plot(subtime, subflux, 'b-')
+    plt.plot(subtime, subflux, 'b-', linewidth=1.0)
     plt.fill(timedata, fluxdata, fc=fill, alpha=0.2)
-            
-    if ymin-yr*0.01 <= 0.0:
-        plt.axis([xmin-xr*0.01, xmax+xr*0.01, 1.0e-10, ymax+yr*0.01])
+
+    if ymin <= dy:
+        plt.axis([xmin-dx, xmax+dx, 1.0e-10, ymax+dy])
     else:
-        plt.axis([xmin-xr*0.01, xmax+xr*0.01, ymin-yr*0.01, ymax+yr*0.01])
+        plt.axis([xmin-dx, xmax+dx, ymin-dy, ymax+dy])
 
     plt.xlabel(xlabel)
     try:
@@ -414,89 +228,304 @@ def plot(arq, yname, quality=True, ylabel='e$^-$ s$^{-1}$', fill='#ffff00'):
     except:
         ylabel = '10$^{%d}$ e$^-$ s$^{-1}$' % exp
         plt.ylabel(ylabel)
+    plt.show()
 
-# plot archived photometric time-series for individual target pixels
-def plotpixel(arq):
-### open TPF
-    id, ch, sky, mod, out, qt, s, ra, dec, mag, xdim, ydim, col, row, timedata = readTPF(arq, 'TIME')
-    id, ch, sky, mod, out, qt, s, ra, dec, mag, xdim, ydim, col, row, qlty = readTPF(arq, 'QUALITY')
-    id, ch, sky, mod, out, qt, s, ra, dec, mag, xdim, ydim, col, row, fluxpix = readTPF(arq, 'FLUX')
-### read mask definition from TPF
-    img, coord1, coord2 = read_mask(arq)
-### print target data
-    print('KepID: '+id)
-    print('RA (J2000): '+ra)
-    print('Dec (J2000): '+dec)
-    print('KepMag: '+mag)
-    print('SkyGroup: '+sky)
-    print('Season: '+str(s))
-    print('Channel: '+ch)
-    print('Module: '+mod)
-    print('Output: '+out)
-### remove bad rows
-    size = 0
-    num_rows = len(fluxpix)
-    for i in range(num_rows):
-        if qlty[i] == 0 and np.isfinite(timedata[i]) and np.isfinite(fluxpix[i,ydim*xdim/2]):
-            size += 1
-    time_array = np.empty((size))
-    corr_array = np.empty((size))
-    cdno_array = np.empty((size))
-    qlty_array = np.empty((size))
-    fpix_array = np.empty((ydim, xdim, size))
-    ferr_array = np.empty((ydim, xdim, size))
-### build output light curves
-    for i in range(ydim):
-        for j in range(xdim):
-            size = 0
-            for k in range(num_rows):
-                if qlty[k] == 0 and np.isfinite(timedata[i]) and np.isfinite(fluxpix[i,ydim*xdim/2]):
-                    time_array[size] = timedata[k]
-                    qlty_array[size] = qlty[k]
-                    fpix_array[i,j,size] = fluxpix[k,i*xdim+j]
-                    size += 1
-### plot pixel array
-    plt.style.use(astropy_mpl_style)
-
-    fmin = 1.0e33
-    fmax = -1.0e33
-    plt.figure(figsize=[12,12])
-    dx = 0.93 / xdim
-    dy = 0.94 / ydim
-    ax = plt.axes([0.06, 0.05, 0.93, 0.94])
-    plt.ticklabel_format(useOffset=False)
-    plt.gca().xaxis.set_major_locator(ticker.MaxNLocator(integer=True))
-    plt.gca().yaxis.set_major_locator(ticker.MaxNLocator(integer=True))
-    plt.axis([np.min(coord1)-0.5, np.max(coord1)+0.5, np.min(coord2)-0.5, np.max(coord2)+0.5])
-    plt.xlabel('time')
-    plt.ylabel('flux')
-    for i in range(ydim):
-        for j in range(xdim):
-            tmin = np.amin(time_array)
-            tmax = np.amax(time_array)
-            fmin = np.amin(fpix_array[i,j,:])
-            fmax = np.amax(fpix_array[i,j,:])
-            xmin = tmin - (tmax-tmin)/40
-            xmax = tmax + (tmax-tmin)/40
-            ymin = fmin - (fmax-fmin)/20
-            ymax = fmax + (fmax-fmin)/20
-            if bit_in_bitmap(img[i,j], 2):
-                plt.axes([0.06+float(j)*dx, 0.05+i*dy, dx, dy], axisbg='lightslategray')
-            elif img[i,j] == 0:
-                plt.axes([0.06+float(j)*dx, 0.05+i*dy, dx, dy], axisbg='black')
-            else:
-                plt.axes([0.06+float(j)*dx, 0.05+i*dy, dx, dy])
-            plt.setp(plt.gca(), xticklabels=[], yticklabels=[])
-
-            ptime = time_array
-            ptime = np.insert(ptime, [0], ptime[0])
-            ptime = np.append(ptime, ptime[-1])
-            pflux = fpix_array[i,j,:]
-            pflux = np.insert(pflux, [0], -1000.0)
-            pflux = np.append(pflux, -1000.0)
-            plt.plot(time_array, fpix_array[i,j,:], 'b-', linewidth=0.5)
-            if not bit_in_bitmap(img[i,j], 2):
-                plt.fill(ptime, pflux, fc='lightslategray', linewidth=0.0, alpha=1.0)
-            plt.fill(ptime, pflux, fc='#fff380', linewidth=0.0, alpha=1.0)
-            plt.xlim(xmin, xmax)
-            plt.ylim(ymin, ymax)
+# cria nova curva de luz aplicando uma mascara ASCII e salva no FITS de saida
+def new_curve(arq, mask, novo_arq):
+### ler arquivo de entrada
+    tpf = abrir(arq, 'readonly')
+    inicio, fim, bjdref, cad = time_info(tpf)
+    cards0 = tpf[0].header.cards
+    cards1 = tpf[1].header.cards
+    cards2 = tpf[2].header.cards
+    tbl = extrair(tpf[1])
+    maskdata = np.copy(tpf[2].data)
+    id, qt, season, ra, dec, mag, xdim, ydim, col, row, timedata = lc_tpf.lerTPF(arq, 'TIME')
+    id, qt, season, ra, dec, mag, xdim, ydim, col, row, tcorrdata = lc_tpf.lerTPF(arq, 'TIMECORR')
+    id, qt, season, ra, dec, mag, xdim, ydim, col, row, caddata = lc_tpf.lerTPF(arq, 'CADENCENO')
+    id, qt, season, ra, dec, mag, xdim, ydim, col, row, rawdata = lc_tpf.lerTPF(arq, 'RAW_CNTS')
+    id, qt, season, ra, dec, mag, xdim, ydim, col, row, fluxdata = lc_tpf.lerTPF(arq, 'FLUX')
+    id, qt, season, ra, dec, mag, xdim, ydim, col, row, ferrdata = lc_tpf.lerTPF(arq, 'FLUX_ERR')
+    id, qt, season, ra, dec, mag, xdim, ydim, col, row, fbkgdata = lc_tpf.lerTPF(arq, 'FLUX_BKG')
+    id, qt, season, ra, dec, mag, xdim, ydim, col, row, bkgerrdata = lc_tpf.lerTPF(arq, 'FLUX_BKG_ERR')
+    id, qt, season, ra, dec, mag, xdim, ydim, col, row, qdata = lc_tpf.lerTPF(arq, 'QUALITY')
+    timedata = np.array(timedata, dtype='float64')
+    tcorrdata = np.array(tcorrdata, dtype='float32')
+    caddata = np.array(caddata, dtype='int')
+    qdata = np.array(qdata, dtype='int')
+    try:
+        pos_corr1 = np.array(tbl.field('POS_CORR1'), dtype='float64')
+    except:
+        pos_corr1 = np.empty(len(timedata))
+        pos_corr1[:] = np.nan
+    try:
+        pos_corr2 = np.array(tbl.field('POS_CORR2'), dtype='float64')
+    except:
+        pos_corr2 = np.empty(len(timedata))
+        pos_corr2[:] = np.nan
+    psf_centr1 = np.empty(len(timedata));       psf_centr1[:] = np.nan
+    psf_centr1_err = np.empty(len(timedata));   psf_centr1_err[:] = np.nan
+    psf_centr2 = np.empty(len(timedata));       psf_centr2[:] = np.nan
+    psf_centr2_err = np.empty(len(timedata));   psf_centr2_err[:] = np.nan
+    mom_centr1_err = np.empty(len(timedata));   mom_centr1_err[:] = np.nan
+    mom_centr2_err = np.empty(len(timedata));   mom_centr2_err[:] = np.nan
+### ler definicao de mascara
+    maskx = np.array([], dtype='int')
+    masky = np.array([], dtype='int')
+    if mask.lower() != 'all':
+        lines = open(mask, 'r')
+        for line in lines:
+            line = line.split('|')
+            if len(line) == 5:
+                y0 = int(line[2])
+                x0 = int(line[3])
+                line = line[4].split(';')
+                for items in line:
+                    try:
+                        masky = np.append(masky, y0+int(items.split(',')[0]))
+                        maskx = np.append(maskx, x0+int(items.split(',')[1]))
+                    except:
+                        continue
+        lines.close()
+        if len(maskx) == 0 or len(masky) == 0:
+            error(mask+' nao possui pixels')
+### definir novo bitmap para subimagem
+    pix1, pix2, val1, val2, delta1, delta2 = lc_tpf.getwcs(tpf[2])
+    if mask.lower() != 'all':
+        aperx = np.array([], dtype='int')
+        apery = np.array([], dtype='int')
+        aperq = np.array([], dtype='int')
+        for i in range(maskdata.shape[0]):
+            for j in range(maskdata.shape[1]):
+                aperx = np.append(aperx, lc_tpf.wcs(j, pix1, val1, delta1))
+                apery = np.append(apery, lc_tpf.wcs(i, pix2, val2, delta2))
+                if maskdata[i,j] == 0:
+                    aperq = np.append(aperq, 0)
+                else:
+                    aperq = np.append(aperq, 1)
+                    maskdata[i,j] = 1
+                    for k in range(len(maskx)):
+                        if aperx[-1] == maskx[k] and apery[-1] == masky[k]:
+                            aperq[-1] = 3
+                            maskdata[i,j] = 3
+    if mask.lower() == 'all':
+        aperx = np.array([], dtype='int')
+        apery = np.array([], dtype='int')
+        aperq = np.array([], dtype='int')
+        for i in range(maskdata.shape[0]):
+            for j in range(maskdata.shape[1]):
+                aperx = np.append(aperx, lc_tpf.wcs(j, pix1, val1, delta1))
+                apery = np.append(apery, lc_tpf.wcs(i, pix2, val2, delta2))
+                if maskdata[i,j] == 0:
+                    aperq = np.append(aperq, 0)
+                else:
+                    aperq = np.append(aperq, 3)
+                    maskdata[i,j] = 3
+    if len(aperq) == 0:
+        error('Nenhum pixel valido definido')
+### construir nova tabela de fluxo
+    num_aper = (aperq==3).sum()
+    num_time = len(timedata)
+    sap_flux = np.array([], dtype='float32')
+    sap_flux_err = np.array([], dtype='float32')
+    sap_bkg = np.array([], dtype='float32')
+    sap_bkg_err = np.array([], dtype='float32')
+    raw_flux = np.array([], dtype='float32')
+    for i in range(num_time):
+        prov1 = np.array([], dtype='float64')
+        prov2 = np.array([], dtype='float64')
+        prov3 = np.array([], dtype='float64')
+        prov4 = np.array([], dtype='float64')
+        prov5 = np.array([], dtype='float64')
+        for j in range(len(aperq)):
+            if aperq[j] == 3:
+                prov1 = np.append(prov1, fluxdata[i,j])
+                prov2 = np.append(prov2, ferrdata[i,j])
+                prov3 = np.append(prov3, fbkgdata[i,j])
+                prov4 = np.append(prov4, bkgerrdata[i,j])
+                prov5 = np.append(prov5, rawdata[i,j])
+        sap_flux = np.append(sap_flux, prov1.sum())
+        sap_flux_err = np.append(sap_flux_err, lc_fourier.sumerr(prov2))
+        sap_bkg = np.append(sap_bkg, prov3.sum())
+        sap_bkg_err = np.append(sap_bkg_err, lc_fourier.sumerr(prov4))
+        raw_flux = np.append(raw_flux, prov5.sum())
+### construir nova tabela de momento
+    mom_centr1 = np.zeros(shape=(num_time))
+    mom_centr2 = np.zeros(shape=(num_time))
+    mom_centr1_err = np.zeros(shape=(num_time))
+    mom_centr2_err = np.zeros(shape=(num_time))
+    for i in range(num_time):
+        xf = np.zeros(shape=(num_aper))
+        yf = np.zeros(shape=(num_aper))
+        f = np.zeros(shape=(num_aper))
+        xfe = np.zeros(shape=(num_aper))
+        yfe = np.zeros(shape=(num_aper))
+        fe = np.zeros(shape=(num_aper))
+        k = 0
+        for j in range(len(aperq)):
+            if aperq[j] == 3:
+                xf[k] = aperx[j] * fluxdata[i,j]
+                xfe[k] = aperx[j] * ferrdata[i,j]
+                yf[k] = apery[j] * fluxdata[i,j]
+                yfe[k] = apery[j] * ferrdata[i,j]
+                f[k] = fluxdata[i,j]
+                fe[k] = ferrdata[i,j]
+                k += 1
+        xfsum = xf.sum()
+        yfsum = yf.sum()
+        fsum = f.sum()
+        xfsume = np.sqrt(np.square(xfe).sum()/num_aper)
+        yfsume = np.sqrt(np.square(yfe).sum()/num_aper)
+        fsume = np.sqrt(np.square(fe).sum()/num_aper)
+        mom_centr1[i] = xfsum/fsum
+        mom_centr2[i] = yfsum/fsum
+        mom_centr1_err[i] = np.sqrt((xfsume/xfsum)**2 + (fsume/fsum)**2)
+        mom_centr2_err[i] = np.sqrt((yfsume/yfsum)**2 + (fsume/fsum)**2)
+    mom_centr1_err *= mom_centr1
+    mom_centr2_err *= mom_centr2
+### construir nova tabela de PSF
+    psf_centr1 = np.zeros(shape=(num_time))
+    psf_centr2 = np.zeros(shape=(num_time))
+    psf_centr1_err = np.zeros(shape=(num_time))
+    psf_centr2_err = np.zeros(shape=(num_time))
+    modx = np.zeros(shape=(num_aper))
+    mody = np.zeros(shape=(num_aper))
+    k = 0
+    for j in range(len(aperq)):
+        if aperq[j] == 3:
+            modx[k] = aperx[j]
+            mody[k] = apery[j]
+            k += 1
+    for i in range(num_time):
+        modf = np.zeros(shape=(num_aper))
+        k = 0
+        tentativa = [mom_centr1[i], mom_centr2[i], np.nanmax(fluxdata[i:]), 1.0, 1.0, 0.0, 0.0]
+        for j in range(len(aperq)):
+            if aperq[j] == 3:
+                modf[k] = fluxdata[i,j]
+                k += 1
+        args = (modx, mody, modf)
+        resp = sci.leastsq(lc_fourier.gaussiana, tentativa, args=args, xtol=1.0e-8, ftol=1.0e-4, full_output=True)
+        s_sq = (resp[2]['fvec']**2).sum() / (num_time-len(tentativa))
+        psf_centr1[i] = resp[0][0]
+        psf_centr2[i] = resp[0][1]
+        try:
+            psf_centr1_err[i] = np.sqrt(np.diag(resp[1]*s_sq))[0]
+        except:
+            psf_centr1_err[i] = np.nan
+        try:
+            psf_centr2_err[i] = np.sqrt(np.diag(resp[1]*s_sq))[1]
+        except:
+            psf_centr2_err[i] = np.nan
+### construir extensao primaria de saida
+    hdu0 = fits.PrimaryHDU()
+    for i in range(len(cards0)):
+        if cards0[i].key not in hdu0.header.keys():
+            newrow(cards0[i].key, cards0[i].value, cards0[i].comment, hdu0)
+        else:
+            hdu0.header.cards[cards0[i].key].comment = cards0[i].comment
+    saida = fits.HDUList(hdu0)
+### construir extensao de curva de luz de saida
+    col1 = fits.Column(name='TIME',format='D',unit='BJD - 2454833',array=timedata)
+    col2 = fits.Column(name='TIMECORR',format='E',unit='d',array=tcorrdata)
+    col3 = fits.Column(name='CADENCENO',format='J',array=caddata)
+    col4 = fits.Column(name='SAP_FLUX',format='E',array=sap_flux)
+    col5 = fits.Column(name='SAP_FLUX_ERR',format='E',array=sap_flux_err)
+    col6 = fits.Column(name='SAP_BKG',format='E',array=sap_bkg)
+    col7 = fits.Column(name='SAP_BKG_ERR',format='E',array=sap_bkg_err)
+    col8 = fits.Column(name='PDCSAP_FLUX',format='E',array=sap_flux)
+    col9 = fits.Column(name='PDCSAP_FLUX_ERR',format='E',array=sap_flux_err)
+    col10 = fits.Column(name='SAP_QUALITY',format='J',array=qdata)
+    col11 = fits.Column(name='PSF_CENTR1',format='E',unit='pixel',array=psf_centr1)
+    col12 = fits.Column(name='PSF_CENTR1_ERR',format='E',unit='pixel',array=psf_centr1_err)
+    col13 = fits.Column(name='PSF_CENTR2',format='E',unit='pixel',array=psf_centr2)
+    col14 = fits.Column(name='PSF_CENTR2_ERR',format='E',unit='pixel',array=psf_centr2_err)
+    col15 = fits.Column(name='MOM_CENTR1',format='E',unit='pixel',array=mom_centr1)
+    col16 = fits.Column(name='MOM_CENTR1_ERR',format='E',unit='pixel',array=mom_centr1_err)
+    col17 = fits.Column(name='MOM_CENTR2',format='E',unit='pixel',array=mom_centr2)
+    col18 = fits.Column(name='MOM_CENTR2_ERR',format='E',unit='pixel',array=mom_centr2_err)
+    col19 = fits.Column(name='POS_CORR1',format='E',unit='pixel',array=pos_corr1)
+    col20 = fits.Column(name='POS_CORR2',format='E',unit='pixel',array=pos_corr2)
+    cols = fits.ColDefs([col1,col2,col3,col4,col5,col6,col7,col8,col9,col10, \
+        col11,col12,col13,col14,col15,col16,col17,col18,col19,col20])
+    hdu1 = fits.new_table(cols)
+    newrow('TTYPE1','TIME','column title: data time stamps',hdu1)
+    newrow('TFORM1','D','data type: float64',hdu1)
+    newrow('TUNIT1','BJD - 2454833','column units: barycenter corrected JD',hdu1)
+    newrow('TDISP1','D12.7','column display format',hdu1)
+    newrow('TTYPE2','TIMECORR','column title: barycentric-timeslice correction',hdu1)
+    newrow('TFORM2','E','data type: float32',hdu1)
+    newrow('TUNIT2','d','column units: days',hdu1)
+    newrow('TTYPE3','CADENCENO','column title: unique cadence number',hdu1)
+    newrow('TFORM3','J','column format: signed integer32',hdu1)
+    newrow('TTYPE4','SAP_FLUX','column title: aperture photometry flux',hdu1)
+    newrow('TFORM4','E','column format: float32',hdu1)
+    newrow('TUNIT4','e-/s','column units: electrons per second',hdu1)
+    newrow('TTYPE5','SAP_FLUX_ERR','column title: aperture phot. flux error',hdu1)
+    newrow('TFORM5','E','column format: float32',hdu1)
+    newrow('TUNIT5','e-/s','column units: electrons per second (1-sigma)',hdu1)
+    newrow('TTYPE6','SAP_BKG','column title: aperture phot. background flux',hdu1)
+    newrow('TFORM6','E','column format: float32',hdu1)
+    newrow('TUNIT6','e-/s','column units: electrons per second',hdu1)
+    newrow('TTYPE7','SAP_BKG_ERR','column title: ap. phot. background flux error',hdu1)
+    newrow('TFORM7','E','column format: float32',hdu1)
+    newrow('TUNIT7','e-/s','column units: electrons per second (1-sigma)',hdu1)
+    newrow('TTYPE8','PDCSAP_FLUX','column title: PDC photometry flux',hdu1)
+    newrow('TFORM8','E','column format: float32',hdu1)
+    newrow('TUNIT8','e-/s','column units: electrons per second',hdu1)
+    newrow('TTYPE9','PDCSAP_FLUX_ERR','column title: PDC flux error',hdu1)
+    newrow('TFORM9','E','column format: float32',hdu1)
+    newrow('TUNIT9','e-/s','column units: electrons per second (1-sigma)',hdu1)
+    newrow('TTYPE10','SAP_QUALITY','column title: aperture photometry quality flag',hdu1)
+    newrow('TFORM10','J','column format: signed integer32',hdu1)
+    newrow('TTYPE11','PSF_CENTR1','column title: PSF fitted column centroid',hdu1)
+    newrow('TFORM11','E','column format: float32',hdu1)
+    newrow('TUNIT11','pixel','column units: pixel',hdu1)
+    newrow('TTYPE12','PSF_CENTR1_ERR','column title: PSF fitted column error',hdu1)
+    newrow('TFORM12','E','column format: float32',hdu1)
+    newrow('TUNIT12','pixel','column units: pixel',hdu1)
+    newrow('TTYPE13','PSF_CENTR2','column title: PSF fitted row centroid',hdu1)
+    newrow('TFORM13','E','column format: float32',hdu1)
+    newrow('TUNIT13','pixel','column units: pixel',hdu1)
+    newrow('TTYPE14','PSF_CENTR2_ERR','column title: PSF fitted row error',hdu1)
+    newrow('TFORM14','E','column format: float32',hdu1)
+    newrow('TUNIT14','pixel','column units: pixel',hdu1)
+    newrow('TTYPE15','MOM_CENTR1','column title: moment-derived column centroid',hdu1)
+    newrow('TFORM15','E','column format: float32',hdu1)
+    newrow('TUNIT15','pixel','column units: pixel',hdu1)
+    newrow('TTYPE16','MOM_CENTR1_ERR','column title: moment-derived column error',hdu1)
+    newrow('TFORM16','E','column format: float32',hdu1)
+    newrow('TUNIT16','pixel','column units: pixel',hdu1)
+    newrow('TTYPE17','MOM_CENTR2','column title: moment-derived row centroid',hdu1)
+    newrow('TFORM17','E','column format: float32',hdu1)
+    newrow('TUNIT17','pixel','column units: pixel',hdu1)
+    newrow('TTYPE18','MOM_CENTR2_ERR','column title: moment-derived row error',hdu1)
+    newrow('TFORM18','E','column format: float32',hdu1)
+    newrow('TUNIT18','pixel','column units: pixel',hdu1)
+    newrow('TTYPE19','POS_CORR1','column title: col correction for vel. abbern',hdu1)
+    newrow('TFORM19','E','column format: float32',hdu1)
+    newrow('TUNIT19','pixel','column units: pixel',hdu1)
+    newrow('TTYPE20','POS_CORR2','column title: row correction for vel. abbern',hdu1)
+    newrow('TFORM20','E','column format: float32',hdu1)
+    newrow('TUNIT20','pixel','column units: pixel',hdu1)
+    newrow('TTYPE21','RAW_FLUX','column title: raw aperture photometry flux',hdu1)
+    newrow('TFORM21','E','column format: float32',hdu1)
+    newrow('TUNIT21','e-/s','column units: electrons per second',hdu1)
+    newrow('EXTNAME','LIGHTCURVE','name of extension',hdu1)
+    for i in range(len(cards1)):
+        if cards1[i].key not in hdu1.header.keys() and cards1[i].key[:4] not in ['TTYP','TFOR','TUNI','TDIS','TDIM','WCAX','1CTY',
+                                                                                 '2CTY','1CRP','2CRP','1CRV','2CRV','1CUN','2CUN',
+                                                                                 '1CDE','2CDE','1CDL','2CDL','11PC','12PC','21PC','22PC']:
+           newrow(cards1[i].key, cards1[i].value, cards1[i].comment, hdu1)
+    saida.append(hdu1)
+### construir extensao de mascara de saida
+    hdu2 = fits.ImageHDU(maskdata)
+    for i in range(len(cards2)):
+        if cards2[i].key not in hdu2.header.keys():
+            newrow(cards2[i].key, cards2[i].value, cards2[i].comment, hdu2)
+        else:
+            hdu2.header.cards[cards2[i].key].comment = cards2[i].comment
+    saida.append(hdu2)
+### escrever arquivo de saida
+    saida.writeto(novo_arq)
+    fechar(tpf)
