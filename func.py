@@ -39,7 +39,7 @@ def fourier(x, y, f1, f2, df):
             yf.append(np.nan)
         passo += 1
     xf = np.array(xf, dtype='float32')
-    yf = np.array(yf, dtype='float32')
+    yf = np.array(np.sqrt(yf), dtype='float32')
     return xf, yf
 
 # Interpolação Gaussiana 2D
@@ -55,7 +55,7 @@ def gaussiana(params, *args):
     --D:     background
     args:
     --pos:   posição para onde extrapolar a curva (x,y)
-    --flux:
+    --flux:  fluxo (variavel dependente)
     '''
 
     cen = [params[0],params[1]]
