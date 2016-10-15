@@ -1,37 +1,37 @@
 from astropy.io import fits
 from astropy.visualization import astropy_mpl_style
-import numpy as np, matplotlib.pyplot as plt, matplotlib.ticker as ticker, os
-import lc_io
+import numpy as np, pyqtgraph as pg, matplotlib.pyplot as plt
+from pyqtgraph import QtGui, QtCore
+import lc
 
 # imprime mensagens de erro
 def error(msg):
     print('ERROR - '+msg)
-    os.system("pause")
 
 # le palavras-chave WCS (World Coordinate System)
 def getwcs(hdu):
     try:
-        pix1 = lc_io.getrow(hdu, 'CRPIX1P')
+        pix1 = lc.getrow(hdu, 'CRPIX1P')
     except:
         pix1 = 0.0
     try:
-        pix2 = lc_io.getrow(hdu, 'CRPIX2P')
+        pix2 = lc.getrow(hdu, 'CRPIX2P')
     except:
         pix2 = 0.0
     try:
-        val1 = lc_io.getrow(hdu, 'CRVAL1P')
+        val1 = lc.getrow(hdu, 'CRVAL1P')
     except:
         val1 = 0.0
     try:
-        val2 = lc_io.getrow(hdu, 'CRVAL2P')
+        val2 = lc.getrow(hdu, 'CRVAL2P')
     except:
         val2 = 0.0
     try:
-        delta1 = lc_io.getrow(hdu, 'CDELT1P')
+        delta1 = lc.getrow(hdu, 'CDELT1P')
     except:
         delta1 = 0.0
     try:
-        delta2 = lc_io.getrow(hdu, 'CDELT2P')
+        delta2 = lc.getrow(hdu, 'CDELT2P')
     except:
         delta2 = 0.0
     return pix1, pix2, val1, val2, delta1, delta2
@@ -42,7 +42,7 @@ def wcs(i, pix, val, delta):
 
 # le TPF (Target Pixel File)
 def lerTPF(arq, nome):
-    tpf = lc_io.abrir(arq, 'readonly')
+    tpf = lc.abrir(arq, 'readonly')
 
     try:
         id = str(tpf[0].header['KEPLERID'])
@@ -91,15 +91,15 @@ def lerTPF(arq, nome):
     except:
         error('Nao foi possivel ler '+nome.upper()+' em '+arq)
         data = None
-    lc_io.fechar(tpf)
+    lc.fechar(tpf)
     if len(np.shape(data)) == 3:
         data = np.reshape(data, (np.shape(data)[0], np.shape(data)[1]*np.shape(data)[2]))
     return id, qt, season, ra, dec, mag, xdim, ydim, col, row, data
 
 # le mask de pixels do TPF
 def ler_mask(arq):
-    tpf = lc_io.abrir(arq, 'readonly')
-    img = lc_io.extrair(tpf['APERTURE'])
+    tpf = lc.abrir(arq, 'readonly')
+    img = lc.extrair(tpf['APERTURE'])
     try:
         size1 = tpf['APERTURE'].header['NAXIS1']
     except:
@@ -115,91 +115,61 @@ def ler_mask(arq):
         for i in range(size1):
             coord1[i,j] = wcs(i, pix1, val1, delta1)
             coord2[i,j] = wcs(j, pix2, val2, delta2)
-    lc_io.fechar(tpf)
+    lc.fechar(tpf)
     return img, coord1, coord2
 
-# diz se um dado bit esta ligado ou desligado no bitmap
-def isbiton(bitmap, bit):
-    for i in range(10,-1,-1):
-        if 2**i <= bitmap:
-            bitmap -= 2**i
-            if 2**i == bit:
-                return True
-    return False
-
 # plota fluxo vs tempo para pixels individuais do alvo
-def plotpixel(arq):
+class plotpixel(pg.GraphicsView):
+    def __init__(self, arq):
 ### abrir TPF
-    id, qt, season, ra, dec, mag, xdim, ydim, col, row, timedata = lerTPF(arq, 'TIME')
-    id, qt, season, ra, dec, mag, xdim, ydim, col, row, qlty = lerTPF(arq, 'QUALITY')
-    id, qt, season, ra, dec, mag, xdim, ydim, col, row, fluxpix = lerTPF(arq, 'FLUX')
+        id, qt, season, ra, dec, mag, xdim, ydim, col, row, timedata = lerTPF(arq, 'TIME')
+        id, qt, season, ra, dec, mag, xdim, ydim, col, row, qlty = lerTPF(arq, 'QUALITY')
+        id, qt, season, ra, dec, mag, xdim, ydim, col, row, fluxpix = lerTPF(arq, 'FLUX')
 ### ler mask do TPF
-    img, coord1, coord2 = ler_mask(arq)
+        img, coord1, coord2 = ler_mask(arq)
 ### remover linhas de lixo
-    new_size = 0
-    num_rows = len(fluxpix)
-    for i in range(num_rows):
-        if qlty[i] == 0 and np.isfinite(timedata[i]) and np.isfinite(fluxpix[i,ydim*xdim/2]):
-            new_size += 1
-    time_array = np.empty((new_size))
-    qlty_array = np.empty((new_size))
-    fpix_array = np.empty((ydim, xdim, new_size))
+        new_size = 0
+        num_rows = len(fluxpix)
+        for i in range(num_rows):
+            if qlty[i] == 0 and np.isfinite(timedata[i]) and np.isfinite(fluxpix[i,ydim*xdim/2]):
+                new_size += 1
+        time_array = np.empty((new_size))
+        qlty_array = np.empty((new_size))
+        fpix_array = np.empty((ydim, xdim, new_size))
 ### construir curvas de luz
-    for i in range(ydim):
-        for j in range(xdim):
-            new_size = 0
-            for k in range(num_rows):
-                if qlty[k] == 0 and np.isfinite(timedata[i]) and np.isfinite(fluxpix[i,ydim*xdim/2]):
-                    time_array[new_size] = timedata[k]
-                    qlty_array[new_size] = qlty[k]
-                    fpix_array[i,j,new_size] = fluxpix[k,i*xdim+j]
-                    new_size += 1
+        for i in range(ydim):
+            for j in range(xdim):
+                new_size = 0
+                for k in range(num_rows):
+                    if qlty[k] == 0 and np.isfinite(timedata[i]) and np.isfinite(fluxpix[i,ydim*xdim/2]):
+                        time_array[new_size] = timedata[k]
+                        qlty_array[new_size] = qlty[k]
+                        fpix_array[i,j,new_size] = fluxpix[k,i*xdim+j]
+                        new_size += 1
 ### plotar array de pixels
-    plt.style.use(astropy_mpl_style)
-
-    fmin = 1.0e33
-    fmax = -1.0e33
-    plt.figure(figsize=[12,12])
-    dx = 0.93 / xdim
-    dy = 0.94 / ydim
-    ax = plt.axes([0.06, 0.05, 0.93, 0.94])
-    plt.ticklabel_format(useOffset=False)
-    plt.gca().xaxis.set_major_locator(ticker.MaxNLocator(integer=True))
-    plt.gca().yaxis.set_major_locator(ticker.MaxNLocator(integer=True))
-    plt.axis([np.min(coord1)-0.5, np.max(coord1)+0.5, np.min(coord2)-0.5, np.max(coord2)+0.5])
-    plt.xlabel('time')
-    plt.ylabel('flux')
-    for i in range(ydim):
+        super(plotpixel, self).__init__()
+        l = pg.GraphicsLayout(border=(100,100,100))
+        self.setCentralItem(l)
+        self.show()
+        self.setWindowTitle(arq+' - plotpixel')
+        self.resize(1200, 1200)
+        pg.setConfigOption('leftButtonPan', False)
+        l.addLabel('fluxo arbitrario', angle=-90, rowspan=ydim)
+        for i in range(ydim-1,-1,-1):
+            l.addLabel(str(int(coord2[0,i])), angle=-90, rowspan=1)
+            for j in range(xdim):
+                pw = l.addPlot()
+                if img[i,j] >= 2:
+                    p = pw.plot(x=time_array, y=fpix_array[i,j,:], pen='g', background='g')
+                elif img[i,j] != 0:
+                    p = pw.plot(x=time_array, y=fpix_array[i,j,:], pen='b', background='w')
+                pw.showAxis('left', False)
+                pw.showAxis('bottom', False)
+            l.nextRow()
         for j in range(xdim):
-            tmin = np.amin(time_array)
-            tmax = np.amax(time_array)
-            fmin = np.amin(fpix_array[i,j,:])
-            fmax = np.amax(fpix_array[i,j,:])
-            xmin = tmin - (tmax-tmin)/40
-            xmax = tmax + (tmax-tmin)/40
-            ymin = fmin - (fmax-fmin)/20
-            ymax = fmax + (fmax-fmin)/20
-            if isbiton(img[i,j], 2):
-                plt.axes([0.06+float(j)*dx, 0.05+i*dy, dx, dy], axisbg='g')
-            elif img[i,j] == 0:
-                plt.axes([0.06+float(j)*dx, 0.05+i*dy, dx, dy], axisbg='k')
-            else:
-                plt.axes([0.06+float(j)*dx, 0.05+i*dy, dx, dy])
-            plt.setp(plt.gca(), xticklabels=[], yticklabels=[])
-
-            ptime = time_array
-            ptime = np.insert(ptime, [0], ptime[0])
-            ptime = np.append(ptime, ptime[-1])
-            pflux = fpix_array[i,j,:]
-            pflux = np.insert(pflux, [0], -1000.0)
-            pflux = np.append(pflux, -1000.0)
-            plt.plot(time_array, fpix_array[i,j,:], 'b-', linewidth=0.5)
-            if not isbiton(img[i,j], 2):
-                plt.fill(ptime, pflux, fc='g', linewidth=0.0, alpha=1.0)
-            plt.fill(ptime, pflux, fc='y', linewidth=0.0, alpha=1.0)
-            plt.xlim(xmin, xmax)
-            plt.ylim(ymin, ymax)
-    plt.show()
+            l.addLabel(str(int(coord1[j,0])), angle=0, col=j+2, colspan=1)
+        l.nextRow()
+        l.addLabel('tempo', angle=0, col=2, colspan=xdim)
 
 # limites de intensidade de array 1D em uma dada escala ['linear'|'log'|'sqrt']
 def rescale(imagem, escala):
@@ -227,22 +197,21 @@ def rescale(imagem, escala):
     return imagem, zmin, zmax
 
 # define novas aberturas otimas para o alvo
-def plotmask(arq, novo_arq, linha=2177, escala='linear', imin=False, imax=False, colormap='bone'):
+def plotmask(arq, linha=2177, escala='linear', imin=False, imax=False, colormap='bone'):
     global id, qt, season, ra, dec, mag, xdim, ydim, col, row
-    global saida, cmap, mask, zmin, zmax, img, xmin, xmax, ymin, ymax
+    global cmap, mask, zmin, zmax, img, xmin, xmax, ymin, ymax
     zmin = imin
     zmax = imax
-    saida = novo_arq
     cmap = colormap
     mask = []
 
-    tpf = lc_io.abrir(arq, 'readonly')
+    tpf = lc.abrir(arq, 'readonly')
     size = tpf[1].header['NAXIS2']
-    lc_io.fechar(tpf)
+    lc.fechar(tpf)
 
     id, qt, season, ra, dec, mag, xdim, ydim, col, row, fluxpix = lerTPF(arq, 'FLUX')
     img = fluxpix[linha]
-
+    #img = fluxpix
     ymin = np.copy(row)
     ymax = ymin + ydim
     xmin = np.copy(col)
@@ -272,8 +241,27 @@ def plotmask(arq, novo_arq, linha=2177, escala='linear', imin=False, imax=False,
 # plot interativo da imagem atual
 def plotimage():
     global cid1, cid2, cid3
-### caixa de texto
-    plt.ion()
+    ### caixa de texto
+    #plt.ion()
+    '''app = QtGui.QApplication([])
+    pg.setConfigOptions(imageAxisOrder='row-major')
+    win = QtGui.QMainWindow()
+    win.resize(800,800)
+    imv = pg.ImageView()
+    #win.setCentralWidget(imv)
+    win.show()
+    win.setWindowTitle('plotmask')
+    print(img.shape)
+    new_img = np.empty((img.shape[0], ydim, xdim))
+    for w in range(img.shape[0]):
+        k = 0
+        for i in range(ydim):
+            for j in range(xdim):
+                new_img[w,(ydim-1)-i,j] = img[w,k]
+                k += 1
+    imv.setImage(new_img)
+    font = QtGui.QFont('SansSerif', 12)
+    win.'''
     plt.clf()
     plt.axes([0.73, 0.09, 0.25, 0.32])
     plt.text(0.1, 0.8, 'ID: '+id, fontsize=12)
@@ -287,7 +275,7 @@ def plotimage():
     plt.setp(plt.gca(), xticklabels=[], xticks=[], yticklabels=[], yticks=[])
     plt.xlim(0.0, 1.0)
     plt.ylim(0.05, 0.9)
-### botao LIMPAR
+    ### botao LIMPAR
     plt.axes([0.73, 0.86, 0.25, 0.11])
     plt.text(0.5, 0.5, 'LIMPAR', fontsize=24, weight='heavy', verticalalignment='center', horizontalalignment='center')
     plt.setp(plt.gca(), xticklabels=[], xticks=[], yticklabels=[], yticks=[])
@@ -295,7 +283,7 @@ def plotimage():
     plt.xlim(0.0, 1.0)
     plt.ylim(0.0, 1.0)
     cid1 = plt.connect('button_press_event', botao1)
-### botao SALVAR
+    ### botao SALVAR
     plt.axes([0.73, 0.62, 0.25, 0.11])
     plt.text(0.5, 0.5, 'SALVAR', fontsize=24, weight='heavy', verticalalignment='center', horizontalalignment='center')
     plt.setp(plt.gca(), xticklabels=[], xticks=[], yticklabels=[], yticks=[])
@@ -303,7 +291,7 @@ def plotimage():
     plt.xlim(0.0, 1.0)
     plt.ylim(0.0, 1.0)
     cid2 = plt.connect('button_press_event', botao2)
-### plotando imagem
+    ### plotando imagem
     plt.axes([0.07, 0.09, 0.63, 0.88])
     plt.ticklabel_format(useOffset=False)
     plt.subplots_adjust(0.06, 0.1, 0.93, 0.88)
@@ -317,7 +305,7 @@ def plotimage():
     plt.gca().set_autoscale_on(False)
     plt.xlabel('Coluna')
     plt.ylabel('Linha')
-### escolher pixels
+    ### escolher pixels
     for pixel in mask:
         m = int(pixel.split(',')[0])
         n = int(pixel.split(',')[1])
@@ -351,6 +339,7 @@ def botao2(event):
                 for coord in sorted(set(mask)):
                     txt += str(int(coord.split(',')[1])-row) + ','
                     txt += str(int(coord.split(',')[0])-col) + ';'
+                saida = input('Nome da mask de saida .txt: ')
                 arq = open(saida, 'a')
                 arq.write(txt[:-1]+'\n')
                 arq.close()
