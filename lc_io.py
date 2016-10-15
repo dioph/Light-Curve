@@ -1,16 +1,11 @@
 from astropy.io import fits
-from astropy.visualization import astropy_mpl_style
-import matplotlib.pyplot as plt, numpy as np, time, os, scipy.optimize as sci
-import lc_tpf, lc_fourier
+import numpy as np, scipy.optimize as sci, pyqtgraph as pg
+from pyqtgraph import QtGui, QtCore
+import tpf, func
 
 # imprime mensagens de erro
 def error(msg):
     print('ERROR - '+msg)
-    os.system("pause")
-
-# escreve mensagem com o horario atual
-def clock(msg=''):
-    print(msg + ': ' + time.asctime(time.localtime()))
 
 # abre arquivo FITS e retorna a HDUlist
 def abrir(arq, modo=None):
@@ -88,7 +83,7 @@ def time_info(hdulist):
     inicio = 0.0
     fim = 0.0
     cad = 0.0
-### BJDREF
+    ### BJDREF
     try:
         bjdrefi = hdulist[1].header['BJDREFI']
     except:
@@ -98,7 +93,7 @@ def time_info(hdulist):
     except:
         bjdreff = 0.0
     bjdref = bjdrefi + bjdreff
-### TSTART
+    ### TSTART
     try:
         inicio = hdulist[1].header['TSTART']
     except:
@@ -110,7 +105,7 @@ def time_info(hdulist):
             except:
                 error('Nao foi possivel encontrar TSTART')
     inicio += bjdref
-### TSTOP
+    ### TSTOP
     try:
         fim = hdulist[1].header['TSTOP']
     except:
@@ -122,7 +117,7 @@ def time_info(hdulist):
             except:
                 error('Nao foi possivel encontrar TSTOP')
     fim += bjdref
-### OBSMODE
+    ### OBSMODE
     cad = 1.0
     try:
         modo = hdulist[0].header['OBSMODE']
@@ -139,100 +134,78 @@ def time_info(hdulist):
     return inicio, fim, bjdref, cad
 
 # plot customizavel
-def plot(arq, yname, quality=True, ylabel='e$^-$ s$^{-1}$', fill='y'):
+class plot(pg.GraphicsWindow):
     '''
     plot customizavel:
 
     arq:     arquivo FITS
     yname:   nome da coluna com dados de fluxo
     quality: True se usuario quiser ignorar cadencias onde a qualidade dos dados é questionavel, False caso contrario
-    ylabel:  label do eixo y; default = 'e$^-$ s$^{-1}$'
-    fill:    cor do preenchimento
+    ylabel:  label do eixo y; default = 'e<sup>-</sup> s<sup>-1</sup>'
     '''
+    def __init__(self, arq, yname, quality=True, ylabel='e<sup>-</sup> s<sup>-1</sup>'):
+        ### ler colunas de entrada
+        hdulist = abrir(arq, 'readonly')
+        inicio, fim, bjdref, cad = time_info(hdulist)
+        tbl = extrair(hdulist[1])
+        xcol = timecol(tbl)
+        xcol += bjdref
+        ycol = getcol(tbl, yname)
+        qcol = getcol(tbl, 'SAP_QUALITY')
+        fechar(hdulist)
+        ### remover lixo dos dados
+        array = np.array([xcol, ycol, qcol], dtype='float64')
+        array = np.rot90(array, 3)
+        array = array[~np.isnan(array).any(1)]
+        array = array[~np.isinf(array).any(1)]
+        if quality:
+            array = array[array[:,0] == 0.0]
+        timedata = np.array(array[:,2], dtype='float64')
+        fluxdata = np.array(array[:,1], dtype='float32')
+        if len(timedata) == 0:
+            error('Arrays estao cheios de lixo')
+        ### organizar os eixos
+        timeshift = float(int(inicio/100) * 100.0)
+        timedata -= timeshift
+        xlabel = 'BJD - %d' % timeshift
 
-    plt.style.use(astropy_mpl_style)
-### ler colunas de entrada
-    hdulist = abrir(arq, 'readonly')
-    inicio, fim, bjdref, cad = time_info(hdulist)
-    tbl = extrair(hdulist[1])
-    xcol = timecol(tbl)
-    xcol += bjdref
-    ycol = getcol(tbl, yname)
-    qcol = getcol(tbl, 'SAP_QUALITY')
-    fechar(hdulist)
-### remover lixo dos dados
-    array = np.array([xcol, ycol, qcol], dtype='float64')
-    array = np.rot90(array, 3)
-    array = array[~np.isnan(array).any(1)]
-    array = array[~np.isinf(array).any(1)]
-    if quality:
-        array = array[array[:,0] == 0.0]
-    timedata = np.array(array[:,2], dtype='float64')
-    fluxdata = np.array(array[:,1], dtype='float32')
-    if len(timedata) == 0:
-        error('Arrays estao cheios de lixo')
-### organizar os eixos
-    timeshift = float(int(inicio/100) * 100.0)
-    timedata -= timeshift
-    xlabel = 'BJD $-$ %d' % timeshift
-
-    exp = 0
-    try:
-        exp = len(str(int(np.nanmax(fluxdata)))) - 1
-    except:
         exp = 0
-    fluxdata /= (10**exp)
-    if 'e$^-$ s$^{-1}$' in ylabel or 'default' in ylabel:
-        if exp == 0:
-            ylabel = 'e$^-$ s$^{-1}$'
-        else:
-            ylabel = '10$^{%d}$ e$^-$ s$^{-1}$' % exp
-### limites
-    xmin = float(np.nanmin(timedata))
-    xmax = float(np.nanmax(timedata))
-    ymin = float(np.nanmin(fluxdata))
-    ymax = float(np.nanmax(fluxdata))
-    dx = (xmax - xmin) * 0.01
-    dy = (ymax - ymin) * 0.01
-    timedata = np.insert(timedata, 0, timedata[0])
-    timedata = np.append(timedata, timedata[-1])
-    fluxdata = np.insert(fluxdata, 0, -10000.0)
-    fluxdata = np.append(fluxdata, -10000.0)
-### plot
-    plt.figure(figsize=[16,8])
-    plt.ticklabel_format(useOffset=False)
-    subtime = np.array([], dtype='float64')
-    subflux = np.array([], dtype='float32')
-    dt = 0
-    deltamax = 2.0 * cad / 86400
-    for i in range(1, len(fluxdata)-1):
-        dt = timedata[i] - timedata[i-1]
-        if dt < deltamax:
-            subtime = np.append(subtime, timedata[i])
-            subflux = np.append(subflux, fluxdata[i])
-        else:
-            plt.plot(subtime, subflux, 'b-', linewidth=1.0)
-            subtime = np.array([], dtype='float64')
-            subflux = np.array([], dtype='float32')
-    plt.plot(subtime, subflux, 'b-', linewidth=1.0)
-    plt.fill(timedata, fluxdata, fc=fill, alpha=0.2)
+        try:
+            exp = len(str(int(np.nanmax(fluxdata)))) - 1
+        except:
+            exp = 0
+        fluxdata /= (10**exp)
+        if 'e<sup>-</sup> s<sup>-1</sup>' in ylabel or 'default' in ylabel:
+            if exp == 0:
+                ylabel = 'e<sup>-</sup> s<sup>-1</sup>'
+            else:
+                ylabel = '10<sup>%d</sup> e<sup>-</sup> s<sup>-1</sup>' % exp
+        ### limites
+        ymin = float(np.nanmin(fluxdata))
+        ymax = float(np.nanmax(fluxdata))
+        dy = (ymax - ymin) * 0.01
+        ### plot
+        super(plot, self).__init__()
+        self.resize(1600,800)
+        pg.setConfigOptions(antialias=True)
+        pg.setConfigOption('leftButtonPan', False)
+        pw = self.addPlot(title=yname.upper())
+        sub = np.array([], dtype='int32')
+        deltamax = 2.0 * cad / 86400
+        for i in range(1, len(fluxdata)):
+            dt = timedata[i] - timedata[i-1]
+            if dt < deltamax:
+                sub = np.append(sub, 1)
+            else:
+                sub = np.append(sub, 0)
+        sub = np.append(sub, 1)
+        pw.plot(x=timedata, y=fluxdata, pen='b', connect=sub)
+        pw.setLabel('bottom', 'time', units=xlabel)
+        pw.setLabel('left', 'flux', units=ylabel)
 
-    if ymin <= dy:
-        plt.axis([xmin-dx, xmax+dx, 1.0e-10, ymax+dy])
-    else:
-        plt.axis([xmin-dx, xmax+dx, ymin-dy, ymax+dy])
-
-    plt.xlabel(xlabel)
-    try:
-        plt.ylabel(ylabel)
-    except:
-        ylabel = '10$^{%d}$ e$^-$ s$^{-1}$' % exp
-        plt.ylabel(ylabel)
-    plt.show()
-
-# cria nova curva de luz aplicando uma mascara ASCII e salva no FITS de saida
+# cria nova curva de luz aplicando mascara e salva no FITS de saida
 def new_curve(arq, mask, novo_arq):
-### ler arquivo de entrada
+    ### ler arquivo de entrada
     tpf = abrir(arq, 'readonly')
     inicio, fim, bjdref, cad = time_info(tpf)
     cards0 = tpf[0].header.cards
@@ -240,15 +213,15 @@ def new_curve(arq, mask, novo_arq):
     cards2 = tpf[2].header.cards
     tbl = extrair(tpf[1])
     maskdata = np.copy(tpf[2].data)
-    id, qt, season, ra, dec, mag, xdim, ydim, col, row, timedata = lc_tpf.lerTPF(arq, 'TIME')
-    id, qt, season, ra, dec, mag, xdim, ydim, col, row, tcorrdata = lc_tpf.lerTPF(arq, 'TIMECORR')
-    id, qt, season, ra, dec, mag, xdim, ydim, col, row, caddata = lc_tpf.lerTPF(arq, 'CADENCENO')
-    id, qt, season, ra, dec, mag, xdim, ydim, col, row, rawdata = lc_tpf.lerTPF(arq, 'RAW_CNTS')
-    id, qt, season, ra, dec, mag, xdim, ydim, col, row, fluxdata = lc_tpf.lerTPF(arq, 'FLUX')
-    id, qt, season, ra, dec, mag, xdim, ydim, col, row, ferrdata = lc_tpf.lerTPF(arq, 'FLUX_ERR')
-    id, qt, season, ra, dec, mag, xdim, ydim, col, row, fbkgdata = lc_tpf.lerTPF(arq, 'FLUX_BKG')
-    id, qt, season, ra, dec, mag, xdim, ydim, col, row, bkgerrdata = lc_tpf.lerTPF(arq, 'FLUX_BKG_ERR')
-    id, qt, season, ra, dec, mag, xdim, ydim, col, row, qdata = lc_tpf.lerTPF(arq, 'QUALITY')
+    id, qt, season, ra, dec, mag, xdim, ydim, col, row, timedata = tpf.lerTPF(arq, 'TIME')
+    id, qt, season, ra, dec, mag, xdim, ydim, col, row, tcorrdata = tpf.lerTPF(arq, 'TIMECORR')
+    id, qt, season, ra, dec, mag, xdim, ydim, col, row, caddata = tpf.lerTPF(arq, 'CADENCENO')
+    id, qt, season, ra, dec, mag, xdim, ydim, col, row, rawdata = tpf.lerTPF(arq, 'RAW_CNTS')
+    id, qt, season, ra, dec, mag, xdim, ydim, col, row, fluxdata = tpf.lerTPF(arq, 'FLUX')
+    id, qt, season, ra, dec, mag, xdim, ydim, col, row, ferrdata = tpf.lerTPF(arq, 'FLUX_ERR')
+    id, qt, season, ra, dec, mag, xdim, ydim, col, row, fbkgdata = tpf.lerTPF(arq, 'FLUX_BKG')
+    id, qt, season, ra, dec, mag, xdim, ydim, col, row, bkgerrdata = tpf.lerTPF(arq, 'FLUX_BKG_ERR')
+    id, qt, season, ra, dec, mag, xdim, ydim, col, row, qdata = tpf.lerTPF(arq, 'QUALITY')
     timedata = np.array(timedata, dtype='float64')
     tcorrdata = np.array(tcorrdata, dtype='float32')
     caddata = np.array(caddata, dtype='int')
@@ -269,7 +242,7 @@ def new_curve(arq, mask, novo_arq):
     psf_centr2_err = np.empty(len(timedata));   psf_centr2_err[:] = np.nan
     mom_centr1_err = np.empty(len(timedata));   mom_centr1_err[:] = np.nan
     mom_centr2_err = np.empty(len(timedata));   mom_centr2_err[:] = np.nan
-### ler definicao de mascara
+    ### ler definicao de mascara
     maskx = np.array([], dtype='int')
     masky = np.array([], dtype='int')
     if mask.lower() != 'all':
@@ -289,16 +262,16 @@ def new_curve(arq, mask, novo_arq):
         lines.close()
         if len(maskx) == 0 or len(masky) == 0:
             error(mask+' nao possui pixels')
-### definir novo bitmap para subimagem
-    pix1, pix2, val1, val2, delta1, delta2 = lc_tpf.getwcs(tpf[2])
+    ### definir novo bitmap para subimagem
+    pix1, pix2, val1, val2, delta1, delta2 = tpf.getwcs(tpf[2])
     if mask.lower() != 'all':
         aperx = np.array([], dtype='int')
         apery = np.array([], dtype='int')
         aperq = np.array([], dtype='int')
         for i in range(maskdata.shape[0]):
             for j in range(maskdata.shape[1]):
-                aperx = np.append(aperx, lc_tpf.wcs(j, pix1, val1, delta1))
-                apery = np.append(apery, lc_tpf.wcs(i, pix2, val2, delta2))
+                aperx = np.append(aperx, tpf.wcs(j, pix1, val1, delta1))
+                apery = np.append(apery, tpf.wcs(i, pix2, val2, delta2))
                 if maskdata[i,j] == 0:
                     aperq = np.append(aperq, 0)
                 else:
@@ -314,8 +287,8 @@ def new_curve(arq, mask, novo_arq):
         aperq = np.array([], dtype='int')
         for i in range(maskdata.shape[0]):
             for j in range(maskdata.shape[1]):
-                aperx = np.append(aperx, lc_tpf.wcs(j, pix1, val1, delta1))
-                apery = np.append(apery, lc_tpf.wcs(i, pix2, val2, delta2))
+                aperx = np.append(aperx, tpf.wcs(j, pix1, val1, delta1))
+                apery = np.append(apery, tpf.wcs(i, pix2, val2, delta2))
                 if maskdata[i,j] == 0:
                     aperq = np.append(aperq, 0)
                 else:
@@ -323,7 +296,7 @@ def new_curve(arq, mask, novo_arq):
                     maskdata[i,j] = 3
     if len(aperq) == 0:
         error('Nenhum pixel valido definido')
-### construir nova tabela de fluxo
+    ### construir nova tabela de fluxo
     num_aper = (aperq==3).sum()
     num_time = len(timedata)
     sap_flux = np.array([], dtype='float32')
@@ -345,11 +318,11 @@ def new_curve(arq, mask, novo_arq):
                 prov4 = np.append(prov4, bkgerrdata[i,j])
                 prov5 = np.append(prov5, rawdata[i,j])
         sap_flux = np.append(sap_flux, prov1.sum())
-        sap_flux_err = np.append(sap_flux_err, lc_fourier.sumerr(prov2))
+        sap_flux_err = np.append(sap_flux_err, func.sumerr(prov2))
         sap_bkg = np.append(sap_bkg, prov3.sum())
-        sap_bkg_err = np.append(sap_bkg_err, lc_fourier.sumerr(prov4))
+        sap_bkg_err = np.append(sap_bkg_err, func.sumerr(prov4))
         raw_flux = np.append(raw_flux, prov5.sum())
-### construir nova tabela de momento
+    ### construir nova tabela de momento
     mom_centr1 = np.zeros(shape=(num_time))
     mom_centr2 = np.zeros(shape=(num_time))
     mom_centr1_err = np.zeros(shape=(num_time))
@@ -383,7 +356,7 @@ def new_curve(arq, mask, novo_arq):
         mom_centr2_err[i] = np.sqrt((yfsume/yfsum)**2 + (fsume/fsum)**2)
     mom_centr1_err *= mom_centr1
     mom_centr2_err *= mom_centr2
-### construir nova tabela de PSF
+    ### construir nova tabela de PSF
     psf_centr1 = np.zeros(shape=(num_time))
     psf_centr2 = np.zeros(shape=(num_time))
     psf_centr1_err = np.zeros(shape=(num_time))
@@ -405,7 +378,7 @@ def new_curve(arq, mask, novo_arq):
                 modf[k] = fluxdata[i,j]
                 k += 1
         args = (modx, mody, modf)
-        resp = sci.leastsq(lc_fourier.gaussiana, tentativa, args=args, xtol=1.0e-8, ftol=1.0e-4, full_output=True)
+        resp = sci.leastsq(func.gaussiana, tentativa, args=args, xtol=1.0e-8, ftol=1.0e-4, full_output=True)
         s_sq = (resp[2]['fvec']**2).sum() / (num_time-len(tentativa))
         psf_centr1[i] = resp[0][0]
         psf_centr2[i] = resp[0][1]
@@ -417,7 +390,7 @@ def new_curve(arq, mask, novo_arq):
             psf_centr2_err[i] = np.sqrt(np.diag(resp[1]*s_sq))[1]
         except:
             psf_centr2_err[i] = np.nan
-### construir extensao primaria de saida
+    ### construir extensao primaria de saida
     hdu0 = fits.PrimaryHDU()
     for i in range(len(cards0)):
         if cards0[i].key not in hdu0.header.keys():
@@ -425,7 +398,7 @@ def new_curve(arq, mask, novo_arq):
         else:
             hdu0.header.cards[cards0[i].key].comment = cards0[i].comment
     saida = fits.HDUList(hdu0)
-### construir extensao de curva de luz de saida
+    ### construir extensao de curva de luz de saida
     col1 = fits.Column(name='TIME',format='D',unit='BJD - 2454833',array=timedata)
     col2 = fits.Column(name='TIMECORR',format='E',unit='d',array=tcorrdata)
     col3 = fits.Column(name='CADENCENO',format='J',array=caddata)
@@ -518,7 +491,7 @@ def new_curve(arq, mask, novo_arq):
                                                                                  '1CDE','2CDE','1CDL','2CDL','11PC','12PC','21PC','22PC']:
            newrow(cards1[i].key, cards1[i].value, cards1[i].comment, hdu1)
     saida.append(hdu1)
-### construir extensao de mascara de saida
+    ### construir extensao de mascara de saida
     hdu2 = fits.ImageHDU(maskdata)
     for i in range(len(cards2)):
         if cards2[i].key not in hdu2.header.keys():
@@ -526,6 +499,6 @@ def new_curve(arq, mask, novo_arq):
         else:
             hdu2.header.cards[cards2[i].key].comment = cards2[i].comment
     saida.append(hdu2)
-### escrever arquivo de saida
+    ### escrever arquivo de saida
     saida.writeto(novo_arq)
     fechar(tpf)
