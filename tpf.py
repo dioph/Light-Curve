@@ -119,57 +119,52 @@ def ler_mask(arq):
     return img, coord1, coord2
 
 # plota fluxo vs tempo para pixels individuais do alvo
-class plotpixel(pg.GraphicsView):
-    def __init__(self, arq):
-### abrir TPF
-        id, qt, season, ra, dec, mag, xdim, ydim, col, row, timedata = lerTPF(arq, 'TIME')
-        id, qt, season, ra, dec, mag, xdim, ydim, col, row, qlty = lerTPF(arq, 'QUALITY')
-        id, qt, season, ra, dec, mag, xdim, ydim, col, row, fluxpix = lerTPF(arq, 'FLUX')
-### ler mask do TPF
-        img, coord1, coord2 = ler_mask(arq)
-### remover linhas de lixo
-        new_size = 0
-        num_rows = len(fluxpix)
-        for i in range(num_rows):
-            if qlty[i] == 0 and np.isfinite(timedata[i]) and np.isfinite(fluxpix[i,ydim*xdim/2]):
-                new_size += 1
-        time_array = np.empty((new_size))
-        qlty_array = np.empty((new_size))
-        fpix_array = np.empty((ydim, xdim, new_size))
-### construir curvas de luz
-        for i in range(ydim):
-            for j in range(xdim):
-                new_size = 0
-                for k in range(num_rows):
-                    if qlty[k] == 0 and np.isfinite(timedata[i]) and np.isfinite(fluxpix[i,ydim*xdim/2]):
-                        time_array[new_size] = timedata[k]
-                        qlty_array[new_size] = qlty[k]
-                        fpix_array[i,j,new_size] = fluxpix[k,i*xdim+j]
-                        new_size += 1
-### plotar array de pixels
-        super(plotpixel, self).__init__()
-        l = pg.GraphicsLayout(border=(100,100,100))
-        self.setCentralItem(l)
-        self.show()
-        self.setWindowTitle(arq+' - plotpixel')
-        self.resize(1200, 1200)
-        pg.setConfigOption('leftButtonPan', False)
-        l.addLabel('fluxo arbitrario', angle=-90, rowspan=ydim)
-        for i in range(ydim-1,-1,-1):
-            l.addLabel(str(int(coord2[0,i])), angle=-90, rowspan=1)
-            for j in range(xdim):
-                pw = l.addPlot()
-                if img[i,j] >= 2:
-                    p = pw.plot(x=time_array, y=fpix_array[i,j,:], pen='g', background='g')
-                elif img[i,j] != 0:
-                    p = pw.plot(x=time_array, y=fpix_array[i,j,:], pen='b', background='w')
-                pw.showAxis('left', False)
-                pw.showAxis('bottom', False)
-            l.nextRow()
-        for j in range(xdim):
-            l.addLabel(str(int(coord1[j,0])), angle=0, col=j+2, colspan=1)
-        l.nextRow()
-        l.addLabel('tempo', angle=0, col=2, colspan=xdim)
+def plotpixel(win, arq):
+	### abrir TPF
+	id, qt, season, ra, dec, mag, xdim, ydim, col, row, timedata = lerTPF(arq, 'TIME')
+	id, qt, season, ra, dec, mag, xdim, ydim, col, row, qlty = lerTPF(arq, 'QUALITY')
+	id, qt, season, ra, dec, mag, xdim, ydim, col, row, fluxpix = lerTPF(arq, 'FLUX')
+	### ler mask do TPF
+	img, coord1, coord2 = ler_mask(arq)
+	### remover linhas de lixo
+	new_size = 0
+	num_rows = len(fluxpix)
+	for i in range(num_rows):
+		if qlty[i] == 0 and np.isfinite(timedata[i]) and np.isfinite(fluxpix[i,ydim*xdim/2]):
+			new_size += 1
+	time_array = np.empty((new_size))
+	qlty_array = np.empty((new_size))
+	fpix_array = np.empty((ydim, xdim, new_size))
+	### construir curvas de luz
+	for i in range(ydim):
+		for j in range(xdim):
+			new_size = 0
+			for k in range(num_rows):
+				if qlty[k] == 0 and np.isfinite(timedata[i]) and np.isfinite(fluxpix[i,ydim*xdim/2]):
+					time_array[new_size] = timedata[k]
+					qlty_array[new_size] = qlty[k]
+					fpix_array[i,j,new_size] = fluxpix[k,i*xdim+j]
+					new_size += 1
+	### plotar array de pixels
+	p = [[pg.PlotDataItem() for j in range(xdim)] for i in range(ydim)]
+	pw = [[pg.PlotItem() for j in range(xdim)] for i in range(ydim)]
+	win.addLabel('fluxo arbitrario', angle=-90, rowspan=ydim)
+	for i in range(ydim-1,-1,-1):
+		win.addLabel(str(int(coord2[0,i])), angle=-90, rowspan=1)
+		for j in range(xdim):
+			pw[i][j] = win.addPlot()
+			if img[i,j] >= 2:
+				p[i][j] = pw[i][j].plot(x=time_array, y=fpix_array[i,j,:], pen='g', background='g', clickable=True)
+			elif img[i,j] != 0:
+				p[i][j] = pw[i][j].plot(x=time_array, y=fpix_array[i,j,:], pen='b', background='w', clickable=True)
+			pw[i][j].showAxis('left', False)
+			pw[i][j].showAxis('bottom', False)
+		win.nextRow()
+	for j in range(xdim):
+		win.addLabel(str(int(coord1[j,0])), angle=0, col=j+2, colspan=1)
+	win.nextRow()
+	win.addLabel('tempo', angle=0, col=2, colspan=xdim)
+	return xdim, ydim, p
 
 # limites de intensidade de array 1D em uma dada escala ['linear'|'log'|'sqrt']
 def rescale(imagem, escala):
@@ -362,3 +357,15 @@ def botao3(event):
                 else:
                     mask.append(txt)
                 plotimage()
+
+if __name__ == "__main__":
+	import argparse
+	app = QtGui.QApplication([])
+	font = QtGui.QFont('Century Gothic', 18)
+	app.setFont(font)
+	win = pg.GraphicsWindow()
+	parser = argparse.ArgumentParser(description='plota fluxo vs tempo para pixels individuais do alvo')
+	parser.add_argument('arq', help='nome do arquivo FITS de origem (TPF)', type=str)
+	args = parser.parse_args()
+	plotpixel(win, args.arq)
+	app.exec_()
