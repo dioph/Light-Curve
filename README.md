@@ -13,6 +13,4 @@ Utiliza os seguintes pacotes:
 
 -- kplr
 
-Criada pelo Grupo de Estrutura e Evolução Estelar - GE3 (DFTE/UFRN)
-
-Baseado parcialmente em funcionalidades da ferramenta PyKE Primer (https://keplerscience.arc.nasa.gov/PyKEprimer.shtml)
+Baseado parcialmente em funcionalidades da ferramenta PyKE https://github.com/KeplerGO/PyKE (https://keplerscience.arc.nasa.gov/PyKEprimer.shtml)
