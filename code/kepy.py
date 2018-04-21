@@ -35,6 +35,14 @@ class interface(QWidget):
         self.win = pg.GraphicsWindow()
         self.layout.addWidget(self.win)
         
+        self.lay_menu = QVBoxLayout()
+        self.menu = QComboBox()
+        self.menu.addItem('')
+        self.menu.addItem('TPF')
+        self.menu.activated.connect(self.update)
+        self.lay_menu.addWidget(self.menu)
+        self.layout.addLayout(self.lay_menu)
+        
     def search(self):
         txt = self.txt_search.text()
         self.lst_search.clear()
@@ -52,7 +60,7 @@ class interface(QWidget):
                     keys.append(pair[0])
                     if '>' in s:
                         pair[1] = '>'+pair[1]
-                    elif '=' in s:
+                    elif '=' in s and '..' not in pair[1]:
                         pair[1] = '='+pair[1]
                     elif '<' in s:
                         pair[1] = '<'+pair[1]
@@ -71,10 +79,19 @@ class interface(QWidget):
         v = Vizier(column_filters={'KIC':'='+kic})
         stars = v.get_catalogs('J/ApJS/229/30/catalog')[0]
         star = stars[0]
-        self.lab_info.setText('KIC {0}\nTeff {1}'.format(star['KIC'], star['Teff']))
-        
-    def update(self):
-        pass
+        self.kic = star['KIC']
+        self.lab_info.setText(u'KIC {0}\n'
+                            u'Teff={1} K\n'
+                            u'logg={2:.3f}\n'
+                            u'Dist={3:.3f} kpc\n'
+                            u'Mass={4:.3f} M\u2609\n'
+                            u'RA={5:.3f}\n'
+                            u'Dec={6:.3f}'.format(star['KIC'], star['Teff'], star['log_g_'], star['Dist'], star['Mass'], star['_RA'], star['_DE']))
+                            
+    def update(self, arg_1):
+        star = self.client.star(self.kic)
+        tpf = star.get_target_pixel_files()
+        print(tpf)
            
 def start():
     global app
