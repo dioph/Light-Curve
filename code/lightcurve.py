@@ -7,11 +7,12 @@ from astropy.convolution import convolve, Box1DKernel, Gaussian1DKernel
 from astropy.io import ascii, fits
 from astroquery.mast import Observations
 from tqdm import tqdm
-from utils import DisableLogger
+from .utils import DisableLogger
+from .corrector import SFFCorrector
 import copy
-import sys
 import warnings
 warnings.filterwarnings('ignore')
+
 
 class LightCurve(object):
     """
@@ -148,7 +149,7 @@ class LightCurve(object):
         """
         clean_lc = self.remove_nans()
         trend = signal.savgol_filter(x=clean_lc.flux, 
-                                    window_length=window_length, 
+                                    window_length=window_length,
                                     polyorder=polyorder, **kwargs)
         flat_lc = copy.copy(clean_lc)
         trend_lc = copy.copy(clean_lc)
@@ -162,7 +163,8 @@ class LightCurve(object):
         fold_time = ((self.time - phase) / period) % 1
         ids = np.argsort(fold_time)
         return LightCurve(fold_time[ids], self.flux[ids])
-    
+
+
 class KeplerLightCurve(LightCurve):
     def __init__(self, time, flux, centroid_col, centroid_row):
         super(KeplerLightCurve, self).__init__(time, flux)
@@ -184,7 +186,8 @@ class KeplerLightCurve(LightCurve):
         new_lc.time = lc_corr.time
         new_lc.flux = lc_corr.flux
         return new_lc
-        
+
+
 def create_from_kic(kic, mode='pdc', plsbar=False, quarter=None, campaign=None):
     paths = get_lc_kepler(kic, quarter=quarter, campaign=campaign)
     x, y, ccol, crow = [], [], [], []
@@ -200,8 +203,10 @@ def create_from_kic(kic, mode='pdc', plsbar=False, quarter=None, campaign=None):
         ccol = np.append(ccol, lc.centroid_col)
         crow = np.append(crow, lc.centroid_row)
     return KeplerLightCurve(x, y, ccol, crow)
-        
+
+
 def create_from_file(filename, xcol='time', ycol='flux', mode='ascii'):
+    assert mode in ['ascii', 'fits', 'kepler'], "unknown mode {}".format(mode)
     if mode == 'ascii':
         tbl = ascii.read(filename)
         x = tbl[xcol]
@@ -222,7 +227,8 @@ def create_from_file(filename, xcol='time', ycol='flux', mode='ascii'):
         crow = hdu['mom_centr2']
         lc = KeplerLightCurve(x, y, ccol, crow)
     return lc
-        
+
+
 def get_lc_kepler(target, quarter=None, campaign=None):
     """
     returns table of LCs from Kepler or K2 for a given target
@@ -250,7 +256,8 @@ def get_lc_kepler(target, quarter=None, campaign=None):
     with DisableLogger():
         dl = Observations.download_products(pr, mrp_only=False)
     return [path[0] for path in list(dl)]
-        
+
+
 def acf(y, maxlag=None, plssmooth=False):
     """
     Auto-Correlation Function of signal
@@ -282,10 +289,12 @@ def acf(y, maxlag=None, plssmooth=False):
     if plssmooth:
         R = smooth(R, 7, kernel='gaussian')
     return R
-        
+
+
 def _dv(y):
     rms = np.sqrt(np.mean(np.square(y-np.median(y))))
     return np.sqrt(8) * rms
+
 
 def _iac(y):
     N = len(y)
@@ -293,7 +302,8 @@ def _iac(y):
     R = acf(y, maxlag=ml)
     ic = 2/N * simps(R, np.arange(0, ml, 1))
     return ic
-    
+
+
 def plot_mcmc(samples, labels=None, priors=None, ptrue=None, nbins=30):
     """
     Plots a Giant Triangle Confusogram
@@ -388,6 +398,7 @@ def plot_mcmc(samples, labels=None, priors=None, ptrue=None, nbins=30):
                 ax.tick_params(rotation=45)
     fig.legend(handles=handles)
 
+
 def make_gauss(m, s):
     """
     Basic 1-D Gaussian implementation
@@ -406,10 +417,12 @@ def make_gauss(m, s):
     def gauss(x):
         return 1/(np.sqrt(2*np.pi)*s) * np.exp(-0.5*((x-m)/s)**2)
     return gauss
-    
+
+
 def gauss(m, s, x):
     return 1/(np.sqrt(2*np.pi)*s) * np.exp(-0.5*((x-m)/s)**2)
-    
+
+
 def smooth(y, scale, kernel='boxcar', **kwargs):
     """
     Smooths a signal with a kernel. Wraps astropy.convolution.convolve
@@ -433,7 +446,8 @@ def smooth(y, scale, kernel='boxcar', **kwargs):
     elif kernel == 'gaussian':
         s = convolve(y, Gaussian1DKernel(scale, **kwargs))
     return s
-    
+
+
 def filt(y, lo, hi, fs, order=5):
     """
     Filters a signal with a 5th order butterworth passband digital filter

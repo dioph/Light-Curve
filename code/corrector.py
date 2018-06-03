@@ -3,6 +3,7 @@ from scipy import linalg, interpolate
 from astropy.stats import sigma_clip
 from lightcurve import LightCurve
 
+
 class SFFCorrector(object):
     def __init__(self):
         pass
@@ -73,3 +74,10 @@ class SFFCorrector(object):
         return interpolate.interp1d(knots, bin_means, bounds_error=False,
                                     fill_value='extrapolate')
 
+
+class CBVCorrector(object):
+    def __init__(self):
+        pass
+
+    def correct(self, cbvs, method='powell'):
+        pass
