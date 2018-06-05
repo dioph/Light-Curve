@@ -1,12 +1,16 @@
-from scipy import signal
 from scipy.optimize import leastsq, minimize
+from astropy.convolution import Box1DKernel
 import emcee
 import celerite
 from celerite import terms
-from lightcurve import *
-import autograd.numpy as np
-from time import perf_counter
 from tqdm import tqdm
+import autograd.numpy as np
+
+from .lightcurve import acf, make_gauss, smooth, filt
+from .utils import plot_mcmc
+from .periodogram import find_peaks
+from time import perf_counter
+
 
 class CustomTerm(terms.Term):
     parameter_names = ("log_B", "log_C", "log_L", "log_P")
@@ -24,6 +28,7 @@ class CustomTerm(terms.Term):
         b = np.exp(log_C)
         c = np.exp(-log_L)
         return (a / (2.0 + b), 0.0, c, 2*np.pi*np.exp(-log_P))
+
 
 class RotationModeler(object):
     def __init__(self, lc):
@@ -73,11 +78,10 @@ class RotationModeler(object):
     
     def lnprior(self, p):
         s, a, b, c, P = p
-        #if not (-20 < s < 0 and -20 < a < 0 and -5 < b < 5 and 
-        #        1.5 < c < 5.0 and -3 < P < 5):
-        #    return -np.inf
-        return np.log(gauss(-17,5,s) * gauss(-10,5,a) * gauss(0,5,b)
-                        * gauss(3,2,c) * self.prior(P))
+        gaussians = [make_gauss(-17, 5), make_gauss(-10, 5), make_gauss(0, 5),
+                     make_gauss(3, 2), self.prior]
+        return np.log(gaussians[0](s) * gaussians[1](a) * gaussians[2](b)
+                        * gaussians[3](c) * gaussians[4](P))
     
     def lnprob(self, p, fast=False):
         self.gp.set_parameter_vector(p)
@@ -121,14 +125,9 @@ class RotationModeler(object):
         sampler = emcee.EnsembleSampler(nwalkers, ndim, prob)
         p = self.gp.get_parameter_vector()
         p0 = p + 1e-5 * np.random.randn(nwalkers, ndim)
-        width = 30
         t1 = perf_counter()
         for result in tqdm(sampler.sample(p0, iterations=nsteps), total=nsteps):
             pass
-         #   n = int((width + 1) * float(i) / nsteps)
-         #   sys.stdout.write(
-         #       "\r[{0}{1}] {2:.1f}%".format('#'*n, ' '*(width-n), 100*float(i+1)/nsteps))
-         #sys.stdout.write("\n")
         t2 = perf_counter()
         print('Done in {0:.2f} seconds.'.format(t2-t1))
         chain = sampler.chain
@@ -147,33 +146,37 @@ class RotationModeler(object):
         plot_mcmc(samples[:, usecols], labels=names[usecols], priors=priors, 
                     ptrue=ptrue, nbins=nbins)
 
+
 def peaks(t, f, pmin=0.1):
     fs = 1/np.median(t[1:] - t[:-1])
-    ti = []
-    hi = []
-    qi = []
+    t -= min(t)
+    ts = []
+    hs = []
+    qs = []
     for i in range(8):
         Pi = 2**i
         if Pi >= max(t)/2:
             continue
         y = filt(f, 1/Pi, 1/pmin, fs)
         ml = np.where(t >= 2*Pi)[0][0]
-        R = acf(y, maxlag=ml, plssmooth=True)
+        R = acf(y, maxlag=ml)
         if Pi >= 20:
-            R = smooth(R, Pi/10)
+            R = smooth(R, Box1DKernel(width=Pi//10))
+        ti, hi = find_peaks(R, t)
         search = np.where(R < 0)[0][0]
         peak = search + np.argmax(R[search:])
-        ti.append(t[peak])
-        hi.append(R[peak])
+        ts.append(ti)
+        hs.append(hi)
         results, msg = leastsq(make_eps(ti[i], 20*Pi/ti[i]), [1, 1], args=(t[:ml], R))
         A, tau = results
         eps = make_eps(ti[i], 20*Pi/ti[i])
         ri = eps(results, t[:ml], R).sum()
-        qi.append((tau/ti[i])*(ml*hi[i]/ri))
-    ti = np.array(ti)
-    hi = np.array(hi)
-    qi = np.array(qi)
-    return ti, hi, qi
+        qs.append((tau/ti[i])*(ml*hi[i]/ri))
+    ts = np.array(ts)
+    hs = np.array(hs)
+    qs = np.array(qs)
+    return ts, hs, qs
+
 
 def make_model_acf(T):
     def model_acf(p, x):
@@ -181,6 +184,7 @@ def make_model_acf(T):
         tau = p[1]
         return A * np.exp(-x/tau) * np.cos(2 * np.pi * x / T)
     return model_acf    
+
 
 def make_eps(T, maxt):
     def eps(p, x, y):
@@ -190,14 +194,16 @@ def make_eps(T, maxt):
         return np.square(y - mod(p, x))
     return eps
 
+
 def make_prior(t, q):
     def prior(logP):
         tot = 0
         for ti,qi in zip(t,q):
             qi = max(qi, 0)
-            tot += qi * (0.9 * gauss(np.log(ti), 0.2, logP) + 
-                        0.05 * gauss(np.log(ti), 0.2, logP) + 
-                        0.05 * gauss(np.log(ti), 0.2, logP))
+            gaussian = make_gauss(np.log(ti), 0.2)
+            tot += qi * (0.9 * gaussian(logP) +
+                         0.05 * gaussian(logP) +
+                         0.05 * gaussian(logP))
         tot /= q.sum()
         return tot
     return prior

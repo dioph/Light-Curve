@@ -1,17 +1,20 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy import signal, ndimage
+from scipy import signal
 from scipy.integrate import simps
 from astropy.stats import sigma_clip
-from astropy.convolution import convolve, Box1DKernel, Gaussian1DKernel
 from astropy.io import ascii, fits
 from astroquery.mast import Observations
 from tqdm import tqdm
+
 from .utils import DisableLogger
 from .corrector import SFFCorrector
 import copy
+import os
 import warnings
 warnings.filterwarnings('ignore')
+
+home_dir = os.getenv('home')
 
 
 class LightCurve(object):
@@ -254,11 +257,11 @@ def get_lc_kepler(target, quarter=None, campaign=None):
                             for desc in products['description']])
     pr = products[mask]
     with DisableLogger():
-        dl = Observations.download_products(pr, mrp_only=False)
+        dl = Observations.download_products(pr, mrp_only=False, download_dir=home_dir)
     return [path[0] for path in list(dl)]
 
 
-def acf(y, maxlag=None, plssmooth=False):
+def acf(y, maxlag=None, plssmooth=True):
     """
     Auto-Correlation Function of signal
     Parameters
@@ -269,7 +272,7 @@ def acf(y, maxlag=None, plssmooth=False):
         Maximum lag to compute ACF. Defaults to len(y)
     plssmooth : bool, optional
         Whether to smooth ACF using a gaussian kernel.
-        
+
     Returns
     -------
     R : array-like
@@ -278,16 +281,13 @@ def acf(y, maxlag=None, plssmooth=False):
     N = len(y)
     if maxlag is None:
         maxlag = N
-    m = np.mean(y)
-    s = np.square(y-m).sum()
-    R = np.zeros(maxlag)
-    lags = np.array(list(range(maxlag)), dtype=int)
-    for h in lags:
-        a = y[h:]
-        b = y[:N-h]
-        R[h] = ((a-m)*(b-m)).sum() / s
+    f = np.fft.fft(y-y.mean(), n=2*N)
+    R = np.fft.ifft(f * np.conjugate(f))[:maxlag].real
+    R /= R[0]
     if plssmooth:
-        R = smooth(R, 7, kernel='gaussian')
+        h = make_gauss(0, 9)
+        h = h(np.arange(-28, 28, 1.))
+        R = smooth(R, kernel=h)
     return R
 
 
@@ -302,101 +302,6 @@ def _iac(y):
     R = acf(y, maxlag=ml)
     ic = 2/N * simps(R, np.arange(0, ml, 1))
     return ic
-
-
-def plot_mcmc(samples, labels=None, priors=None, ptrue=None, nbins=30):
-    """
-    Plots a Giant Triangle Confusogram
-    Parameters
-    ----------
-    samples : 2-D array, shape (N, ndim)
-        Samples from ndim variables to be plotted in the GTC
-    labels : list of strings, optional
-        List of names for each variable (size ndim)
-    priors : list of callables, optional
-        List of prior functions for the variables distributions (size ndim)
-    ptrue : float, optional     #TODO: change into generic list of floats
-    nbins : int, optional
-        Number of bins to be used in 1D and 2D histograms. Defaults to 30
-    """
-    p = map(lambda v: (v[1], v[1]-v[0], v[2]-v[1]),
-        zip(*np.percentile(samples, [16, 50, 84], axis=0)))
-    p = list(p)
-    ndim = samples.shape[-1]
-    fig = plt.figure(figsize=(8,8))
-    fig.subplots_adjust(left=0.05, right=0.95, top=0.95, bottom=0.05)
-    plt.style.use('dfm_small')
-    grid = plt.GridSpec(ndim, ndim, wspace=0.0, hspace=0.0)
-    handles = []
-    
-    ### PLOT 1D
-    for i in range(ndim):
-        ax = fig.add_subplot(grid[i,i])
-        H, edges = np.histogram(samples[:, i], bins=nbins, normed=True)
-        centers = (edges[1:]+edges[:-1])/2
-        data = ndimage.gaussian_filter1d((centers, H), sigma=1.0)
-        data[1] /= data[1].sum()
-        l1, = ax.plot(data[0], data[1], 'b-', lw=1, label='posterior')
-        if priors is not None:
-            pr = priors[i](centers)
-            pr /= pr.sum()
-            l2, = ax.plot(centers, pr, 'k-', lw=1, label='prior')
-        l3 = ax.axvline(p[i][0], color='k', ls='--', label='median')
-        mask = np.logical_and(centers-p[i][0] <= p[i][2],
-                                p[i][0]-centers <= p[i][1])
-        ax.fill_between(centers[mask], np.zeros(mask.sum()), data[1][mask],
-                         color='b', alpha=0.3)
-        if i < ndim-1:
-            ax.set_xticks([])
-        else:
-            ax.tick_params(rotation=45)
-            if ptrue is not None:
-                l4 = ax.axvline(ptrue, color='gray', lw=1.5, label='true')
-        ax.set_yticks([])
-        ax.set_ylim(0)
-        if labels is not None:
-            ax.set_title('{0} = {1:.2f}$^{{+{2:.2f}}}_{{-{3:.2f}}}$'.format(
-                            labels[i], p[i][0], p[i][2], p[i][1]))
-    
-    handles.append(l1) 
-    handles.append(l2)
-    try:
-        handles.append(l3)
-    except:
-        pass
-    try:
-        handles.append(l4)      
-    except:
-        pass
-          
-    ### PLOT 2D
-    nbins_flat = np.linspace(0, nbins**2, nbins**2)
-    for i in range(ndim):
-        for j in range(i):
-            ax = fig.add_subplot(grid[i,j])
-            H, xi, yi = np.histogram2d(samples[:, j], samples[:, i], bins=nbins)
-            extents = [xi[0], xi[-1], yi[0], yi[-1]]
-            H /= H.sum()
-            H_order = np.sort(H.flat)
-            H_cumul = np.cumsum(H_order)
-            tmp = np.interp([.0455, .3173, 1.0], H_cumul, nbins_flat)
-            chainlevels = np.interp(tmp, nbins_flat, H_order)
-            data = ndimage.gaussian_filter(H.T, sigma=1.0)
-            xbins = (xi[1:]+xi[:-1])/2
-            ybins = (yi[1:]+yi[:-1])/2
-            ax.contourf(xbins, ybins, data, levels=chainlevels, colors=['#1f77b4','#52aae7','#85ddff'], alpha=0.3)
-            ax.contour(data, chainlevels, extent=extents, colors='b')
-            if i < ndim-1:
-                ax.set_xticks([])
-            else:
-                ax.tick_params(rotation=45)
-                if ptrue is not None:
-                    ax.axhline(ptrue, color='gray', lw=1.5)
-            if j > 0:
-                ax.set_yticks([])
-            else:
-                ax.tick_params(rotation=45)
-    fig.legend(handles=handles)
 
 
 def make_gauss(m, s):
@@ -419,11 +324,7 @@ def make_gauss(m, s):
     return gauss
 
 
-def gauss(m, s, x):
-    return 1/(np.sqrt(2*np.pi)*s) * np.exp(-0.5*((x-m)/s)**2)
-
-
-def smooth(y, scale, kernel='boxcar', **kwargs):
+def smooth(y, kernel):
     """
     Smooths a signal with a kernel. Wraps astropy.convolution.convolve
     
@@ -441,11 +342,16 @@ def smooth(y, scale, kernel='boxcar', **kwargs):
     s : array-like
         Filtered signal
     """
-    if kernel == 'boxcar':
-        s = convolve(y, Box1DKernel(scale, **kwargs))
-    elif kernel == 'gaussian':
-        s = convolve(y, Gaussian1DKernel(scale, **kwargs))
-    return s
+
+    N = len(y)
+    double_y = np.zeros(2*N)
+    double_y[:N] = y[::-1]
+    double_y[N:] = y
+
+    ys = np.convolve(double_y, kernel, mode='same')
+    ys = ys[N:]
+
+    return ys
 
 
 def filt(y, lo, hi, fs, order=5):
@@ -474,5 +380,4 @@ def filt(y, lo, hi, fs, order=5):
     b, a = signal.butter(order, [lo, hi], btype='band')
     yf = signal.lfilter(b, a, y)
     return yf          
-
 
