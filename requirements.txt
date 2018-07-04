@@ -4,3 +4,7 @@ scipy>=0.19.0
 astropy>=1.3
 astroquery>=0.3.7
 tqdm
+emcee
+george
+celerite
+autograd
