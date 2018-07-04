@@ -11,21 +11,22 @@ from .utils import DisableLogger
 from .corrector import SFFCorrector
 import copy
 import os
+import glob
 import warnings
-warnings.filterwarnings('ignore')
 
-home_dir = os.getenv('home')
+warnings.filterwarnings('ignore')
 
 
 class LightCurve(object):
     """
     Implements a simple class for a generic light curve
-    
+
     Attributes
     ----------
     time : array-like
     flux : array-like
     """
+
     def __init__(self, time, flux):
         self.time = time
         self.flux = flux
@@ -40,10 +41,10 @@ class LightCurve(object):
         """
         Returns a normalized version of the lightcurve
         obtained dividing `flux` by the median flux
-        
+
         Returns
         -------
-        lc : LightCurve object 
+        lc : LightCurve object
         """
         lc = copy.copy(self)
         if np.abs(np.nanmedian(lc.flux)) < 1e-9:
@@ -51,13 +52,13 @@ class LightCurve(object):
         else:
             lc.flux = lc.flux / np.nanmedian(lc.flux)
         return lc
-        
+
     def remove_nans(self):
         """
         Removes NaN values from flux array
         """
         return self[~np.isnan(self.flux)]
-        
+
     def remove_outliers(self, sigma=5., return_mask=False):
         """
         Removes outliers from lightcurve
@@ -69,7 +70,7 @@ class LightCurve(object):
         return_mask : bool, optional
             Whether to return outlier_mask with the rejected points masked
             Defaults to False
-            
+
         Returns
         -------
         lc : LightCurve object
@@ -80,7 +81,7 @@ class LightCurve(object):
         if return_mask:
             return self[~outlier_mask], outlier_mask
         return self[~outlier_mask]
-        
+
     def bins(self, binsize=13, method='mean'):
         """
         """
@@ -97,11 +98,11 @@ class LightCurve(object):
         if hasattr(lc, 'centroid_row'):
             lc.centrod_row = np.array([methodf(a) for a in np.array_split(self.centroid_row, n_bins)])
         return lc
-    
+
     def plot(self, ax=None, *args, **kwargs):
         """
         Plots lightcurve in given ax
-        
+
         Returns
         -------
         ax : axes object
@@ -110,11 +111,11 @@ class LightCurve(object):
             fig, ax = plt.subplots(1)
         ax.plot(self.time, self.flux, *args, **kwargs)
         return ax
-        
+
     def activity_proxy(self, method='dv'):
         """
         Calculates a photometric index for magnetic activity
-        
+
         Parameters
         ----------
         method : string, optional
@@ -123,14 +124,14 @@ class LightCurve(object):
             --- dv  : (He et al. 2015)
             --- iac : (He et al. 2015)
             Defaults to dv.
-        
+
         Returns
         -------
         act : float
             Photometric activity proxy of lightcurve
         """
         available_methods = ['dv', 'iac']
-        dic = {'dv':_dv, 'iac':_iac}
+        dic = {'dv': _dv, 'iac': _iac}
         if method not in available_methods:
             raise ValueError("method must be one of: {}".format(available_methods))
         methodf = dic[method]
@@ -138,11 +139,11 @@ class LightCurve(object):
         lc = lc.remove_nans()
         act = methodf(lc.flux)
         return act
-        
+
     def flatten(self, window_length=101, polyorder=3, **kwargs):
         """
         Removes low-frequency trend using scipy's Savitzky-Golay filter
-        
+
         Returns
         -------
         trend_lc : LightCurve object
@@ -151,15 +152,15 @@ class LightCurve(object):
             Detrended lightcurve
         """
         clean_lc = self.remove_nans()
-        trend = signal.savgol_filter(x=clean_lc.flux, 
-                                    window_length=window_length,
-                                    polyorder=polyorder, **kwargs)
+        trend = signal.savgol_filter(x=clean_lc.flux,
+                                     window_length=window_length,
+                                     polyorder=polyorder, **kwargs)
         flat_lc = copy.copy(clean_lc)
         trend_lc = copy.copy(clean_lc)
         trend_lc.flux = trend
         flat_lc.flux = clean_lc.flux / trend
         return trend_lc, flat_lc
-        
+
     def fold(self, period, phase=0.0):
         """
         """
@@ -167,24 +168,60 @@ class LightCurve(object):
         ids = np.argsort(fold_time)
         return LightCurve(fold_time[ids], self.flux[ids])
 
+    def fill(self):
+        lc = copy.copy(self)
+        cadence = np.median(np.diff(lc.time))
+        gaps = np.where(np.diff(lc.time) > 1.5 * cadence)[0]
+        x_gaps = []
+        y_gaps = []
+        for i in gaps:
+            x0, x1 = lc.time[i:i + 2]
+            y0, y1 = lc.flux[i:i + 2]
+            xfill = np.arange(x0 + cadence, x1, cadence)
+            x_gaps.append(xfill)
+            y_gaps.append(y0 + (xfill - x0) * (y1 - y0) / (x1 - x0))
+        ids = []
+        shift = 1
+        for i, xg, yg in zip(gaps, x_gaps, y_gaps):
+            idx = i + shift
+            lc.time = np.insert(lc.time, idx, xg)
+            lc.flux = np.insert(lc.flux, idx, yg)
+            n = len(xg)
+            ids.append(np.arange(idx, idx + n))
+            shift += n
+        if len(ids) > 0:
+            ids = np.concatenate(ids)
+        else:
+            ids = np.array([])
+        lc.time = np.arange(lc.time.size) * cadence + lc.time[0]
+        return LightCurve(lc.time, lc.flux), ids
+
+    def detrend(self, mode='poly', order=1):
+        lc = copy.copy(self)
+        if mode == 'poly':
+            p = np.polyfit(lc.time, lc.flux, deg=order)
+            p = np.poly1d(p)
+            lc.flux -= p(lc.time)
+        return lc
+
 
 class KeplerLightCurve(LightCurve):
     def __init__(self, time, flux, centroid_col, centroid_row):
         super(KeplerLightCurve, self).__init__(time, flux)
         self.centroid_col = centroid_col
         self.centroid_row = centroid_row
-        
+
     def __getitem__(self, key):
         lc = super(KeplerLightCurve, self).__getitem__(key)
         lc.centroid_col = self.centroid_col[key]
         lc.centroid_row = self.centroid_row[key]
         return lc
-        
+
     def correct(self, **kwargs):
         assert np.isnan(self.flux).sum() == 0, "Please remove nans before correcting."
         corrector = SFFCorrector()
-        lc_corr = corrector.correct(time=self.time, flux=self.flux, 
-            centroid_col=self.centroid_col, centroid_row=self.centroid_row, **kwargs)
+        lc_corr = corrector.correct(time=self.time, flux=self.flux,
+                                    centroid_col=self.centroid_col, centroid_row=self.centroid_row, **kwargs)
         new_lc = copy.copy(self)
         new_lc.time = lc_corr.time
         new_lc.flux = lc_corr.flux
@@ -199,13 +236,14 @@ def create_from_kic(kic, mode='pdc', plsbar=False, quarter=None, campaign=None):
     else:
         bar = paths
     for p in bar:
-        lc = create_from_file(p, xcol='time', ycol=mode+'sap_flux', mode='kepler')
+        lc = create_from_file(p, xcol='time', ycol=mode + 'sap_flux', mode='kepler')
         lc = lc.normalize()
         x = np.append(x, lc.time)
         y = np.append(y, lc.flux)
         ccol = np.append(ccol, lc.centroid_col)
         crow = np.append(crow, lc.centroid_row)
-    return KeplerLightCurve(x, y, ccol, crow)
+    ids = x.argsort()
+    return KeplerLightCurve(x[ids], y[ids], ccol[ids], crow[ids])
 
 
 def create_from_file(filename, xcol='time', ycol='flux', mode='ascii'):
@@ -232,33 +270,75 @@ def create_from_file(filename, xcol='time', ycol='flux', mode='ascii'):
     return lc
 
 
+def find_obs(name, suffix, when):
+    home_dir = os.getenv('HOME')
+    obs = Observations.query_criteria(target_name=name, project=['Kepler', 'K2'])
+    products = Observations.get_product_list(obs)
+    mask = np.array([suffix in fn for fn in products['description']])
+    if when is not None:
+        mask &= np.array([desc.lower().endswith('q{}'.format(when)) or
+                          desc.lower().endswith('c{:02}'.format(when)) or
+                          desc.replace('-', '').lower().endswith('c{:03d}'.format(when))
+                          for desc in products['description']])
+    pr = products[mask]
+    with DisableLogger():
+        dl = Observations.download_products(pr, mrp_only=False, download_dir=home_dir)
+    return [path[0] for path in list(dl)]
+
+
 def get_lc_kepler(target, quarter=None, campaign=None):
     """
     returns table of LCs from Kepler or K2 for a given target
     """
-    
+
+    suffix = 'Lightcurve Long'
+    when = campaign if campaign is not None else quarter
+
     if 0 < target < 2e8:
         name = 'kplr{:09d}'.format(target)
     elif 2e8 < target < 3e8:
         name = 'ktwo{:09d}'.format(target)
     else:
-        #TODO: implement error handling function
-        pass
-        
-    obs = Observations.query_criteria(target_name=name, project=['Kepler', 'K2'])
-    products = Observations.get_product_list(obs)
-    suffix = 'Lightcurve Long'
-    mask = np.array([suffix in fn for fn in products['description']])
-    when = campaign if campaign is not None else quarter
+        # TODO: error handling
+        raise ValueError("target {} outside range".format(target))
+
+    home_dir = os.getenv('HOME')
     if when is not None:
-        mask &= np.array([desc.lower().endswith('q{}'.format(when)) or
-                            desc.lower().endswith('c{:02}'.format(when)) or
-                            desc.replace('-','').lower().endswith('c{:03d}'.format(when))
-                            for desc in products['description']])
-    pr = products[mask]
-    with DisableLogger():
-        dl = Observations.download_products(pr, mrp_only=False, download_dir=home_dir)
-    return [path[0] for path in list(dl)]
+        files = find_obs(name, suffix, when)
+
+    if 0 < target < 2e8:
+        name = 'kplr{:09d}'.format(target)
+        path = glob.glob('{0}/mastDownload/Kepler/{1}*'.format(home_dir, name))
+        if len(path) > 0:
+            files = glob.glob('{0}/{1}*_llc.fits'.format(path[0], name))
+        else:
+            files = find_obs(name, suffix, when)
+    elif 2e8 < target < 3e8:
+        name = 'ktwo{:09d}'.format(target)
+        path = glob.glob('{0}/mastDownload/K2/{1}*'.format(home_dir, name))
+        if len(path) > 0:
+            files = glob.glob('{0}/{1}*_llc.fits'.format(path[0], name))
+        else:
+            files = find_obs(name, suffix, when)
+    else:
+        # TODO: implement error handling function
+        files = None
+        pass
+    return files
+
+
+def get_from_tess(tic, ext='.fits'):
+    import requests
+    from bs4 import BeautifulSoup
+
+    tic = str(tic).zfill(11)
+    url = 'https://archive.stsci.edu/missions/tess/ete-6/tid/' \
+          '{0}/{1}/{2}/{3}/'.format(tic[:2], tic[2:5], tic[5:8], tic[8:])
+    page = requests.get(url).text
+    soup = BeautifulSoup(page, 'html.parser')
+    files = [url + '/' + node.get('href') for node in soup.find_all('a')
+             if node.get('href').endswith(ext)]
+    return files
 
 
 def acf(y, maxlag=None, plssmooth=True):
@@ -281,26 +361,26 @@ def acf(y, maxlag=None, plssmooth=True):
     N = len(y)
     if maxlag is None:
         maxlag = N
-    f = np.fft.fft(y-y.mean(), n=2*N)
+    f = np.fft.fft(y - y.mean(), n=2 * N)
     R = np.fft.ifft(f * np.conjugate(f))[:maxlag].real
-    R /= R[0]
     if plssmooth:
         h = make_gauss(0, 9)
         h = h(np.arange(-28, 28, 1.))
         R = smooth(R, kernel=h)
+    R /= R[0]
     return R
 
 
 def _dv(y):
-    rms = np.sqrt(np.mean(np.square(y-np.median(y))))
+    rms = np.sqrt(np.mean(np.square(y - np.median(y))))
     return np.sqrt(8) * rms
 
 
 def _iac(y):
     N = len(y)
-    ml = N//2 + 1
+    ml = N // 2 + 1
     R = acf(y, maxlag=ml)
-    ic = 2/N * simps(R, np.arange(0, ml, 1))
+    ic = 2 / N * simps(R, np.arange(0, ml, 1))
     return ic
 
 
@@ -313,38 +393,38 @@ def make_gauss(m, s):
         Mean (location parameter)
     s : float, array-like
         Standard deviation (scale parameter)
-    
+
     Returns
     -------
     gauss : callable
         A gaussian function on a variable x with given parameters
     """
+
     def gauss(x):
-        return 1/(np.sqrt(2*np.pi)*s) * np.exp(-0.5*((x-m)/s)**2)
+        return 1 / (np.sqrt(2 * np.pi) * s) * np.exp(-0.5 * ((x - m) / s) ** 2)
+
     return gauss
 
 
 def smooth(y, kernel):
     """
-    Smooths a signal with a kernel. Wraps astropy.convolution.convolve
-    
+    Smooths a signal with a kernel. Wraps `numpy.convolve`
+
     Parameters
     ----------
     y : array-like
         Raw signal
-    scale : int
-        Scale parameter of filter (e.g. width, stddev)
     kernel : str, optional
         Kernel used to convolve signal. Default: ``boxcar''
 
     Returns
     -------
-    s : array-like
+    ys : array-like
         Filtered signal
     """
 
     N = len(y)
-    double_y = np.zeros(2*N)
+    double_y = np.zeros(2 * N)
     double_y[:N] = y[::-1]
     double_y[N:] = y
 
@@ -356,8 +436,8 @@ def smooth(y, kernel):
 
 def filt(y, lo, hi, fs, order=5):
     """
-    Filters a signal with a 5th order butterworth passband digital filter
-    
+    Filters a signal with a butterworth passband digital filter
+
     Parameters
     ----------
     y : array-like
@@ -368,7 +448,9 @@ def filt(y, lo, hi, fs, order=5):
         Higher critical frequency with -3dB
     fs : float
         Sampling frequency (fs > hi > lo)
-    
+    order : int, optional
+        Filter order. Deafult order = 5
+
     Returns
     -------
     yf : array-like
@@ -378,6 +460,5 @@ def filt(y, lo, hi, fs, order=5):
     lo /= nyq
     hi /= nyq
     b, a = signal.butter(order, [lo, hi], btype='band')
-    yf = signal.lfilter(b, a, y)
-    return yf          
-
+    yf = signal.filtfilt(b, a, y)
+    return yf
