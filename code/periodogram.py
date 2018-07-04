@@ -1,13 +1,15 @@
 import numpy as np
+from scipy.stats import linregress
 import matplotlib.pyplot as plt
 from astropy.stats import LombScargle as ls
 
 from .lightcurve import create_from_kic, acf
+from time import perf_counter
 import warnings
 warnings.filterwarnings('ignore')
 
 
-def periodogram(kic=None, lc=None, span=None, scale='period',
+def periodogram(kic=None, lc=None, span=None, scale='frequency',
                 nperiods=10001, verbose=True):
     """
     Calculates and plots Lomb-Scargle and ACF for a given lightcurve.
@@ -35,6 +37,7 @@ def periodogram(kic=None, lc=None, span=None, scale='period',
     bp_acf : float
         Best period found with ACF
     """
+    t1 = perf_counter()
     if lc is None:
         if kic is not None:
             lc = create_from_kic(kic, plsbar=True)
@@ -45,11 +48,14 @@ def periodogram(kic=None, lc=None, span=None, scale='period',
         print('Got LC.')
     lc = lc.remove_nans().remove_outliers()
     lc.time -= lc.time.min()
+    if lc.flux.mean() > 0.1:
+        lc.flux = lc.flux / np.median(lc.flux)
     if verbose:
         print('Clean.')
     dv = lc.activity_proxy()
 
-    # TODO: fit and subtract a straight line
+    m, b = linregress(lc.time, lc.flux)[:2]
+    lc.flux -= m * lc.time + b
 
     plt.style.use('idl_small')
 
@@ -64,13 +70,13 @@ def periodogram(kic=None, lc=None, span=None, scale='period',
     else:
         freq = np.linspace(1./span[1], 1./span[0], nperiods)
 
-    lc.flux = lc.flux / np.median(lc.flux) - 1.0
     lomb = ls(lc.time, lc.flux)
     a = lomb.power(freq)
     if verbose:
         print('Calculated periodogram.')
-    bp_ls = 1./freq[np.argmax(a)]
-    # TODO: find multiple L-S peaks
+    peaks = np.array([i for i in range(1, len(freq)-1)
+                      if a[i-1] < a[i] and a[i+1] < a[i]])
+    bp_ls = 1./freq[peaks][a[peaks].argsort()[-3:][::-1]]
     fap = lomb.false_alarm_probability(a.max())
     if verbose:
         print('Calculated FAP.')
@@ -93,25 +99,28 @@ def periodogram(kic=None, lc=None, span=None, scale='period',
     ax[0].set_xlim(focus-span[1], focus+span[1])
 
     ax[1].plot(1./freq, a, 'r-')
-    ax[1].axvline(bp_ls, color='k', ls='--', lw=1)
+    for i,bp in enumerate(bp_ls):
+        ax[1].axvline(bp, color='k', ls='--', lw=1)
+        ax[1].text(.85*span[1], (.9-.2*i)*a.max(), '{0:.2f} d'.format(bp))
     ax[1].set_ylabel('L-S')
     ax[1].set_xlim(span)
-    ax[1].text(.85*span[1], .9*a.max(), '{0:.2f} d'.format(bp_ls))
-    ax[1].text(.80*span[1], .8*a.max(), 'FAP={0:.2f}%'.format(100*fap))
-    # TODO: FAP text placement
+    ax[1].text(.825*span[1], .3*a.max(), 'FAP={0:.2f}%'.format(100*fap))
     ax[2].plot(lc.time[:ml], R, 'k-')
     ax[2].axhline(0.0, color='gray')
     ax[2].set_ylabel('ACF')
     ax[2].set_xlim(0, span[1])
     bp_acf = lc.time[ti][R[ti].argsort()[-3:][::-1]]
-    size = np.max(np.abs(R[ti]))
+    size = np.max(np.abs(R[50:]))
     ax[2].set_ylim(-1.1*size, 1.1*size)
     for i,bp in enumerate(bp_acf):
         ax[2].axvline(bp, color='r', ls='--', lw=1)
-        ax[2].text(.85*span[1], (.85-.15*i)*abs(size), '{0:.2f} d'.format(bp))
+        ax[2].text(.85*span[1], (.85-.2*i)*abs(size), '{0:.2f} d'.format(bp))
     if fap > 0.05:
         bp_ls = np.nan
-    return bp_ls, bp_acf
+    t2 = perf_counter()
+    if verbose:
+        print('Done in {0:.2f} s'.format(t2-t1))
+    return bp_ls, bp_acf, ax
 
 
 def find_peaks(R, lags):
@@ -135,10 +144,11 @@ def find_peaks(R, lags):
     leftheights = R[leftdips]
     rightheights = R[rightdips]
     peakheights = R[peaks]
-    hi = 0.5 * (np.abs(peakheights-leftheights) +
-                       np.abs(peakheights-rightheights))
+    # heights = 0.5 * (np.abs(peakheights-leftheights) +
+    #                   np.abs(peakheights-rightheights))
+    heights = R[peaks]
 
-    return peaks, hi
+    return peaks, heights
 
 
 if __name__ == '__main__':
