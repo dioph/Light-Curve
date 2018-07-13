@@ -5,10 +5,11 @@ with open('README.md', 'r') as fh:
 
 setuptools.setup(
     name='litecurve',
-    version='0.0.1',
+    version='0.0.2',
     author='Eduardo Nunes',
     author_email='diofanto.nunes@gmail.com',
-    description='Python3 Lightcurve Astrophysical Analysis',
+    license='MIT',
+    description='Light Curve Analysis with Python3',
     long_description=long_description,
     long_description_content_type='text/markdown',
     url='https://github.com/dioph/litecurve',
@@ -17,5 +18,7 @@ setuptools.setup(
         'Programming Language :: Python :: 3',
         'License :: OSI Approved :: MIT License',
         'Operating System :: OS Independent',
+        'Intended Audience :: Science/Research',
+        'Topic :: Scientific/Engineering :: Astronomy',
     ),
 )
