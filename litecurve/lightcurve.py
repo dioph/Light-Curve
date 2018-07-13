@@ -1,18 +1,19 @@
-import numpy as np
+import copy
+import glob
+import os
+import warnings
+
 import matplotlib.pyplot as plt
+import numpy as np
+from astropy.io import ascii, fits
+from astropy.stats import sigma_clip
+from astroquery.mast import Observations
 from scipy import signal
 from scipy.integrate import simps
-from astropy.stats import sigma_clip
-from astropy.io import ascii, fits
-from astroquery.mast import Observations
 from tqdm import tqdm
 
-from .utils import DisableLogger
 from .corrector import SFFCorrector
-import copy
-import os
-import glob
-import warnings
+from .utils import DisableLogger
 
 warnings.filterwarnings('ignore')
 
@@ -305,25 +306,25 @@ def get_lc_kepler(target, quarter=None, campaign=None):
     home_dir = os.getenv('HOME')
     if when is not None:
         files = find_obs(name, suffix, when)
-
-    if 0 < target < 2e8:
-        name = 'kplr{:09d}'.format(target)
-        path = glob.glob('{0}/mastDownload/Kepler/{1}*'.format(home_dir, name))
-        if len(path) > 0:
-            files = glob.glob('{0}/{1}*_llc.fits'.format(path[0], name))
-        else:
-            files = find_obs(name, suffix, when)
-    elif 2e8 < target < 3e8:
-        name = 'ktwo{:09d}'.format(target)
-        path = glob.glob('{0}/mastDownload/K2/{1}*'.format(home_dir, name))
-        if len(path) > 0:
-            files = glob.glob('{0}/{1}*_llc.fits'.format(path[0], name))
-        else:
-            files = find_obs(name, suffix, when)
     else:
-        # TODO: implement error handling function
-        files = None
-        pass
+        if 0 < target < 2e8:
+            name = 'kplr{:09d}'.format(target)
+            path = glob.glob('{0}/mastDownload/Kepler/{1}*'.format(home_dir, name))
+            if len(path) > 0:
+                files = glob.glob('{0}/{1}*_llc.fits'.format(path[0], name))
+            else:
+                files = find_obs(name, suffix, when)
+        elif 2e8 < target < 3e8:
+            name = 'ktwo{:09d}'.format(target)
+            path = glob.glob('{0}/mastDownload/K2/{1}*'.format(home_dir, name))
+            if len(path) > 0:
+                files = glob.glob('{0}/{1}*_llc.fits'.format(path[0], name))
+            else:
+                files = find_obs(name, suffix, when)
+        else:
+            # TODO: implement error handling function
+            files = None
+            pass
     return files
 
 
