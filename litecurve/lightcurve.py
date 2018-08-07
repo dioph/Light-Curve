@@ -248,6 +248,30 @@ def create_from_kic(kic, mode='pdc', plsbar=False, quarter=None, campaign=None):
 
 
 def create_from_file(filename, xcol='time', ycol='flux', mode='ascii'):
+    """
+    Creates a light curve from a given file.
+
+    Parameters
+    ----------
+    filename : string
+        path to file to extract lightcurve from.
+    xcol : string, optional
+        column name corresponding to time variable. Default: 'time'
+    ycol : string, optional
+        column name corresponding to flux variable. Default: 'flux'
+    mode : string, optional
+        extraction type.
+        Current implemented modes are:
+        -- 'ascii' : reads simple txt files.
+        -- 'fits' : reads hdu[1].data for a given hdu
+        -- 'kepler' : same as 'fits' but creates a KeplerLightCurve with centroids.
+        Defaults to 'ascii'.
+
+    Returns
+    -------
+    lc : LightCurve or KeplerLightCurve object
+        light curve corresponding to the given columns from given file.
+    """
     assert mode in ['ascii', 'fits', 'kepler'], "unknown mode {}".format(mode)
     if mode == 'ascii':
         tbl = ascii.read(filename)
@@ -272,6 +296,23 @@ def create_from_file(filename, xcol='time', ycol='flux', mode='ascii'):
 
 
 def find_obs(name, suffix, when):
+    """
+    Finds observations for a given target
+
+    Parameters
+    ----------
+    name : string
+        Kepler/K2 target name
+    suffix : string
+        file descriptor (e.g. 'Lightcurve Long')
+    when : int
+        quarter/campaign of interest
+
+    Returns
+    -------
+    dl : list
+        list of paths of downloaded files for the target.
+    """
     home_dir = os.getenv('HOME')
     obs = Observations.query_criteria(target_name=name, project=['Kepler', 'K2'])
     products = Observations.get_product_list(obs)
@@ -329,8 +370,12 @@ def get_lc_kepler(target, quarter=None, campaign=None):
 
 
 def get_from_tess(tic, ext='.fits'):
-    import requests
-    from bs4 import BeautifulSoup
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+    except ImportError:
+        print('install packagegs requests and bs4.')
+        return
 
     tic = str(tic).zfill(11)
     url = 'https://archive.stsci.edu/missions/tess/ete-6/tid/' \
@@ -350,9 +395,9 @@ def acf(y, maxlag=None, plssmooth=True):
     y : array-like
         Signal
     maxlag : int, optional
-        Maximum lag to compute ACF. Defaults to len(y)
+        Maximum lag to compute ACF. Defaults to ``len(y)''
     plssmooth : bool, optional
-        Whether to smooth ACF using a gaussian kernel.
+        Whether to smooth ACF using a gaussian kernel. Defaults to ``True''.
 
     Returns
     -------
@@ -362,7 +407,7 @@ def acf(y, maxlag=None, plssmooth=True):
     N = len(y)
     if maxlag is None:
         maxlag = N
-    f = np.fft.fft(y - y.mean(), n=2 * N)
+    f = np.fft.fft(y - y.mean(), n=2*N)
     R = np.fft.ifft(f * np.conjugate(f))[:maxlag].real
     if plssmooth:
         h = make_gauss(0, 9)
@@ -450,7 +495,7 @@ def filt(y, lo, hi, fs, order=5):
     fs : float
         Sampling frequency (fs > hi > lo)
     order : int, optional
-        Filter order. Deafult order = 5
+        Filter order. Default order = 5
 
     Returns
     -------
