@@ -3,9 +3,11 @@ import setuptools
 with open('README.md', 'r') as fh:
     long_description = fh.read()
 
+exec(open('litecurve/version.py').read())
+
 setuptools.setup(
     name='litecurve',
-    version='0.0.2',
+    version=__version__,
     author='Eduardo Nunes',
     author_email='diofanto.nunes@gmail.com',
     license='MIT',

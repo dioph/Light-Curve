@@ -44,14 +44,14 @@ def periodogram(kic=None, lc=None, span=None, scale='frequency',
     t1 = perf_counter()
     if lc is None:
         if kic is not None:
-            lc = create_from_kic(kic, plsbar=True)
+            lc = create_from_kic(kic, plsbar=verbose)
         else:
             print('No lightcurve was defined.')
             return
     if verbose:
         print('Got LC.')
     lc = lc.remove_nans().remove_outliers()
-    lc.time -= lc.time.min()
+    lc_fill, ids = lc.fill()
     if lc.flux.mean() > 0.1:
         lc.flux = lc.flux / np.median(lc.flux)
     if verbose:
@@ -86,16 +86,17 @@ def periodogram(kic=None, lc=None, span=None, scale='frequency',
     if verbose:
         print('Calculated FAP.')
 
-    ml = np.where(lc.time >= span[1])[0][0]
-    R = acf(lc.flux, maxlag=ml, plssmooth=True)
-    ti, hi = find_peaks(R, lc.time[:ml])
+    lags = lc_fill.time - lc_fill.time.min()
+    ml = np.where(lags >= span[1])[0][0]
+    R = acf(lc_fill.flux, maxlag=ml, s=9)
+    ti, hi = find_peaks(R, lags[:ml])
     if verbose:
         print('Calculated ACF.')
 
     fig, ax = plt.subplots(3, 1)
     fig.subplots_adjust(hspace=0.25, left=0.12)
     if kic is not None:
-        fig.suptitle('KIC {}'.format(kic), fontsize=18)
+        fig.suptitle('{0} {1}'.format(["KIC", "EPIC"][kic > 2e8], kic), fontsize=18)
 
     lc.plot(ax[0], 'ko', markersize=3, alpha=0.25)
     ax[0].axhline(dv/2, color='r')
@@ -110,6 +111,7 @@ def periodogram(kic=None, lc=None, span=None, scale='frequency',
         ax[1].text(.85*span[1], (.9-.2*i)*a.max(), '{0:.2f} d'.format(bp))
     ax[1].set_ylabel('L-S')
     ax[1].set_xlim(span)
+    ax[1].set_ylim(0)
     ax[1].text(.825*span[1], .3*a.max(), 'FAP={0:.2f}%'.format(100*fap))
 
     if fap > 0.05:

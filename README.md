@@ -30,6 +30,7 @@ lc_fill, ids = lc.fill()
 lags = lc_fill.time - lc_fill.time.min()
 maxlag = np.where(lags >= 70)[0][0]
 R = acf(lc_fill.flux, maxlag=maxlag)
+
 fig, ax = plt.subplots(2, 1)
 lc.plot(ax[0], 'ko', markersize=3)
 ax[0].set_xlabel('TIME')

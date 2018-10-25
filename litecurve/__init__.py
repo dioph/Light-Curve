@@ -1,8 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-from __future__ import absolute_import
-
 from .cleanest import *
 from .corrector import *
 from .lightcurve import *

@@ -1,18 +1,19 @@
-from scipy.optimize import leastsq, minimize, least_squares
-from scipy.stats import linregress
-from astropy.convolution import Box1DKernel
-import emcee
-import celerite
-from celerite import terms
-import george
-from george import kernels
-from tqdm import tqdm
+from time import perf_counter
+
 import autograd.numpy as np
+import celerite
+import emcee
+import george
+from astropy.convolution import Box1DKernel
+from celerite import terms
+from george import kernels
+from scipy.optimize import minimize, least_squares
+from scipy.stats import linregress
+from tqdm import tqdm
 
 from .lightcurve import acf, smooth, make_gauss, filt
-from .utils import plot_mcmc
 from .periodogram import find_peaks
-from time import perf_counter
+from .utils import plot_mcmc
 
 
 class RotationModeler(object):
@@ -28,8 +29,8 @@ class RotationModeler(object):
         self.decimate()
         self.prior = lambda p: np.array([-np.inf, 0])[np.array(np.logical_and(-0.69 < p, p < 4.61), dtype=int)]
 
-    def make(self, pmin=0.1):
-        ti, hi, qi = peaks(self.xdec, self.ydec, pmin)
+    def make(self, pmin=0.1, verbose=True):
+        ti, hi, qi = peaks(self.xdec, self.ydec, pmin, verbose)
         self.prior = make_prior(ti, qi)
 
     def decimate(self, xmin=None, xmax=None, dec=None):
@@ -143,7 +144,9 @@ class RotationModeler(object):
         samples = chain[:, burn:, :].reshape(-1, ndim)
         return samples
 
-    def plot(self, samples=None, ptrue=None, nbins=30, usecols=[0, 1, 2, 3, 4], **kwargs):
+    def plot(self, samples=None, ptrue=None, nbins=30, usecols=None, **kwargs):
+        if usecols is None:
+            usecols = [0, 1, 2, 3, 4]
         if samples is None:
             samples = self.mcmc(**kwargs)
         gaussians = np.append([make_gauss(self._mu[i], self._sigma[i]) for i in
@@ -222,7 +225,8 @@ class StrongRotationModeler(RotationModeler):
         return lp
 
 
-def peaks(t, f, pmin=0.1):
+def peaks(t, f, pmin=0.1, verbose=True):
+    # TODO: adapt to different timescales
     import matplotlib.pyplot as plt
     fs = 1 / np.median(np.diff(t))
     t -= min(t)
@@ -231,7 +235,8 @@ def peaks(t, f, pmin=0.1):
     qs = []
     for i in range(8):
         Pi = 2 ** i
-        print('TESTANDO PI = {}'.format(Pi))
+        if verbose:
+            print('TESTANDO PI = {}'.format(Pi))
         if Pi >= max(t) / 2 or Pi <= pmin:
             continue
         y = filt(f, 1 / Pi, 1 / pmin, fs)
@@ -239,15 +244,18 @@ def peaks(t, f, pmin=0.1):
         R = acf(y, maxlag=ml)
         if Pi >= 20:
             R = smooth(R, Box1DKernel(width=Pi // 10))
-        plt.figure()
-        plt.plot(t[:ml], R, 'k-')
+        if verbose:
+            plt.figure()
+            plt.plot(t[:ml], R, 'k-')
         try:
             peaks, heights = find_peaks(R, t[:ml])
         except:
-            plt.close()
+            if verbose:
+                plt.close()
             continue
         bp_acf = t[peaks][np.argmax(heights)]
-        plt.axvline(bp_acf, color='r', ls='--', lw=1)
+        if verbose:
+            plt.axvline(bp_acf, color='r', ls='--', lw=1)
         ts.append(bp_acf)
         hs.append(max(heights))
 
@@ -263,9 +271,10 @@ def peaks(t, f, pmin=0.1):
         print(res.x)
         A, tau = res.x
         R_model = A * np.exp(-t[:ml] / tau) * np.cos(2 * np.pi * t[:ml] / bp_acf)
-        plt.plot(t[:ml], R_model, 'b-')
-        plt.savefig('/home/alpaca/Desktop/TEST{}.png'.format(Pi))
-        plt.close()
+        if verbose:
+            plt.plot(t[:ml], R_model, 'b-')
+            plt.savefig('/home/alpaca/Desktop/TEST{}.png'.format(Pi))
+            plt.close()
         eps = make_eps(ts[-1], 20 * Pi / ts[-1])
         ri = eps(res.x, t[:ml], R).sum()
         qs.append((tau / ts[-1]) * (ml * hs[-1] / ri))

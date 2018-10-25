@@ -171,7 +171,7 @@ class LightCurve(object):
 
     def fill(self):
         lc = copy.copy(self)
-        cadence = np.median(np.diff(lc.time))
+        cadence = float(np.median(np.diff(lc.time)))
         gaps = np.where(np.diff(lc.time) > 1.5 * cadence)[0]
         x_gaps = []
         y_gaps = []
@@ -331,6 +331,20 @@ def find_obs(name, suffix, when):
 def get_lc_kepler(target, quarter=None, campaign=None):
     """
     returns table of LCs from Kepler or K2 for a given target
+
+    Parameters
+    ----------
+    target : int
+        KIC/EPIC ID number of target
+    quarter : int, optional
+        quarter of interest for Kepler light curves
+    campaign : int, optional
+        campaign of interest for K2 light curves
+
+    Returns
+    -------
+    files : list
+        list of file paths to downloaded light curves
     """
 
     suffix = 'Lightcurve Long'
@@ -374,7 +388,7 @@ def get_from_tess(tic, ext='.fits'):
         import requests
         from bs4 import BeautifulSoup
     except ImportError:
-        print('install packagegs requests and bs4.')
+        print('install packages requests and bs4.')
         return
 
     tic = str(tic).zfill(11)
@@ -387,7 +401,7 @@ def get_from_tess(tic, ext='.fits'):
     return files
 
 
-def acf(y, maxlag=None, plssmooth=True):
+def acf(y, maxlag=None, s=0):
     """
     Auto-Correlation Function of signal
     Parameters
@@ -396,8 +410,8 @@ def acf(y, maxlag=None, plssmooth=True):
         Signal
     maxlag : int, optional
         Maximum lag to compute ACF. Defaults to ``len(y)''
-    plssmooth : bool, optional
-        Whether to smooth ACF using a gaussian kernel. Defaults to ``True''.
+    s : bool, optional
+        Standard deviation of gaussian kernel to smooth ACF
 
     Returns
     -------
@@ -409,9 +423,9 @@ def acf(y, maxlag=None, plssmooth=True):
         maxlag = N
     f = np.fft.fft(y - y.mean(), n=2*N)
     R = np.fft.ifft(f * np.conjugate(f))[:maxlag].real
-    if plssmooth:
-        h = make_gauss(0, 9)
-        h = h(np.arange(-28, 28, 1.))
+    if s > 0:
+        h = make_gauss(0, s)
+        h = h(np.arange(-(3*s-1), 3*s, 1.))
         R = smooth(R, kernel=h)
     R /= R[0]
     return R
