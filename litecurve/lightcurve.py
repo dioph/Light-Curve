@@ -247,6 +247,18 @@ def create_from_kic(kic, mode='pdc', plsbar=False, quarter=None, campaign=None):
     return KeplerLightCurve(x[ids], y[ids], ccol[ids], crow[ids])
 
 
+def create_from_tic(tic, mode='pdc'):
+    paths = get_lc_tess(tic)
+    x, y = [], []
+    for p in paths:
+        lc = create_from_file(p, xcol='time', ycol=mode+'sap_flux', mode='fits')
+        lc = lc.normalize()
+        x = np.append(x, lc.time)
+        y = np.append(y, lc.flux)
+    ids = x.argsort()
+    return LightCurve(x[ids], y[ids])
+
+
 def create_from_file(filename, xcol='time', ycol='flux', mode='ascii'):
     """
     Creates a light curve from a given file.
@@ -295,7 +307,7 @@ def create_from_file(filename, xcol='time', ycol='flux', mode='ascii'):
     return lc
 
 
-def find_obs(name, suffix, when):
+def find_obs(name, suffix, when=None):
     """
     Finds observations for a given target
 
@@ -304,7 +316,7 @@ def find_obs(name, suffix, when):
     name : string
         Kepler/K2 target name
     suffix : string
-        file descriptor (e.g. 'Lightcurve Long')
+        file descriptor (e.g. 'lc.fits')
     when : int
         quarter/campaign of interest
 
@@ -314,9 +326,9 @@ def find_obs(name, suffix, when):
         list of paths of downloaded files for the target.
     """
     home_dir = os.getenv('HOME')
-    obs = Observations.query_criteria(target_name=name, project=['Kepler', 'K2'])
+    obs = Observations.query_criteria(target_name=name, project=['Kepler', 'K2', 'TESS'])
     products = Observations.get_product_list(obs)
-    mask = np.array([suffix in fn for fn in products['description']])
+    mask = np.array([suffix in fn for fn in products['productFilename']])
     if when is not None:
         mask &= np.array([desc.lower().endswith('q{}'.format(when)) or
                           desc.lower().endswith('c{:02}'.format(when)) or
@@ -380,6 +392,13 @@ def get_lc_kepler(target, quarter=None, campaign=None):
             # TODO: implement error handling function
             files = None
             pass
+    return files
+
+
+def get_lc_tess(tic):
+    """NEW DATA RELEASE!!!"""
+    suffix = 'lc.fits'
+    files = find_obs(tic, suffix)
     return files
 
 

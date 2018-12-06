@@ -241,7 +241,7 @@ def peaks(t, f, pmin=0.1, verbose=True):
             continue
         y = filt(f, 1 / Pi, 1 / pmin, fs)
         ml = np.where(t >= 2 * Pi)[0][0]
-        R = acf(y, maxlag=ml)
+        R = acf(y, maxlag=ml, s=9)
         if Pi >= 20:
             R = smooth(R, Box1DKernel(width=Pi // 10))
         if verbose:
