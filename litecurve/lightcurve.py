@@ -28,14 +28,16 @@ class LightCurve(object):
     flux : array-like
     """
 
-    def __init__(self, time, flux):
+    def __init__(self, time, flux, flux_err):
         self.time = time
         self.flux = flux
+        self.flux_err = flux_err
 
     def __getitem__(self, key):
         lc = copy.copy(self)
         lc.time = self.time[key]
         lc.flux = self.flux[key]
+        lc.flux_err = self.flux_err[key]
         return lc
 
     def normalize(self):
@@ -51,6 +53,7 @@ class LightCurve(object):
         if np.abs(np.nanmedian(lc.flux)) < 1e-9:
             lc.flux = lc.flux + 1
         else:
+            lc.flux_err = lc.flux_err / np.nanmedian(lc.flux)
             lc.flux = lc.flux / np.nanmedian(lc.flux)
         return lc
 
@@ -94,6 +97,7 @@ class LightCurve(object):
         lc = copy.copy(self)
         lc.time = np.array([methodf(a) for a in np.array_split(self.time, n_bins)])
         lc.flux = np.array([methodf(a) for a in np.array_split(self.flux, n_bins)])
+        lc.flux_err = np.array([methodf(a) for a in np.array_split(self.flux_err, n_bins)])
         if hasattr(lc, 'centroid_col'):
             lc.centrod_col = np.array([methodf(a) for a in np.array_split(self.centroid_col, n_bins)])
         if hasattr(lc, 'centroid_row'):
@@ -167,7 +171,7 @@ class LightCurve(object):
         """
         fold_time = ((self.time - phase) / period) % 1
         ids = np.argsort(fold_time)
-        return LightCurve(fold_time[ids], self.flux[ids])
+        return LightCurve(fold_time[ids], self.flux[ids], self.flux_err[ids])
 
     def fill(self):
         lc = copy.copy(self)
@@ -175,18 +179,21 @@ class LightCurve(object):
         gaps = np.where(np.diff(lc.time) > 1.5 * cadence)[0]
         x_gaps = []
         y_gaps = []
+        dy_gaps = []
         for i in gaps:
             x0, x1 = lc.time[i:i + 2]
             y0, y1 = lc.flux[i:i + 2]
             xfill = np.arange(x0 + cadence, x1, cadence)
             x_gaps.append(xfill)
             y_gaps.append(y0 + (xfill - x0) * (y1 - y0) / (x1 - x0))
+            dy_gaps.append(np.nan * np.ones_like(xfill))
         ids = []
         shift = 1
-        for i, xg, yg in zip(gaps, x_gaps, y_gaps):
+        for i, xg, yg, dyg in zip(gaps, x_gaps, y_gaps, dy_gaps):
             idx = i + shift
             lc.time = np.insert(lc.time, idx, xg)
             lc.flux = np.insert(lc.flux, idx, yg)
+            lc.flux_err = np.insert(lc.flux_err, idx, dyg)
             n = len(xg)
             ids.append(np.arange(idx, idx + n))
             shift += n
@@ -195,7 +202,7 @@ class LightCurve(object):
         else:
             ids = np.array([])
         lc.time = np.arange(lc.time.size) * cadence + lc.time[0]
-        return LightCurve(lc.time, lc.flux), ids
+        return LightCurve(lc.time, lc.flux, lc.flux_err), ids
 
     def detrend(self, mode='poly', order=1):
         lc = copy.copy(self)
@@ -207,8 +214,8 @@ class LightCurve(object):
 
 
 class KeplerLightCurve(LightCurve):
-    def __init__(self, time, flux, centroid_col, centroid_row):
-        super(KeplerLightCurve, self).__init__(time, flux)
+    def __init__(self, time, flux, flux_err, centroid_col, centroid_row):
+        super(KeplerLightCurve, self).__init__(time, flux, flux_err)
         self.centroid_col = centroid_col
         self.centroid_row = centroid_row
 
@@ -226,40 +233,30 @@ class KeplerLightCurve(LightCurve):
         new_lc = copy.copy(self)
         new_lc.time = lc_corr.time
         new_lc.flux = lc_corr.flux
+        new_lc.flux_err = lc_corr.flux_err
         return new_lc
 
 
 def create_from_kic(kic, mode='pdc', plsbar=False, quarter=None, campaign=None):
     paths = get_lc_kepler(kic, quarter=quarter, campaign=campaign)
-    x, y, ccol, crow = [], [], [], []
+    x, y, dy, ccol, crow = [], [], [], [], []
     if plsbar:
         bar = tqdm(paths)
     else:
         bar = paths
     for p in bar:
-        lc = create_from_file(p, xcol='time', ycol=mode + 'sap_flux', mode='kepler')
+        lc = create_from_file(p, xcol='time', ycol=mode + 'sap_flux', yerr=mode + 'sap_flux_err', mode='kepler')
         lc = lc.normalize()
         x = np.append(x, lc.time)
         y = np.append(y, lc.flux)
+        dy = np.append(dy, lc.flux_err)
         ccol = np.append(ccol, lc.centroid_col)
         crow = np.append(crow, lc.centroid_row)
     ids = x.argsort()
-    return KeplerLightCurve(x[ids], y[ids], ccol[ids], crow[ids])
+    return KeplerLightCurve(x[ids], y[ids], dy[ids], ccol[ids], crow[ids])
 
 
-def create_from_tic(tic, mode='pdc'):
-    paths = get_lc_tess(tic)
-    x, y = [], []
-    for p in paths:
-        lc = create_from_file(p, xcol='time', ycol=mode+'sap_flux', mode='fits')
-        lc = lc.normalize()
-        x = np.append(x, lc.time)
-        y = np.append(y, lc.flux)
-    ids = x.argsort()
-    return LightCurve(x[ids], y[ids])
-
-
-def create_from_file(filename, xcol='time', ycol='flux', mode='ascii'):
+def create_from_file(filename, xcol='time', ycol='flux', yerr=None, mode='ascii'):
     """
     Creates a light curve from a given file.
 
@@ -271,6 +268,8 @@ def create_from_file(filename, xcol='time', ycol='flux', mode='ascii'):
         column name corresponding to time variable. Default: 'time'
     ycol : string, optional
         column name corresponding to flux variable. Default: 'flux'
+    yerr : string, optional
+        column name corresponding to flux uncertainty variable. Default: None
     mode : string, optional
         extraction type.
         Current implemented modes are:
@@ -289,13 +288,21 @@ def create_from_file(filename, xcol='time', ycol='flux', mode='ascii'):
         tbl = ascii.read(filename)
         x = tbl[xcol]
         y = tbl[ycol]
-        lc = LightCurve(x, y)
+        if yerr is not None:
+            dy = tbl[yerr]
+        else:
+            dy = np.ones_like(y)
+        lc = LightCurve(x, y, dy)
     elif mode == 'fits':
         tbl = fits.open(filename)
         hdu = tbl[1].data
         x = hdu[xcol]
         y = hdu[ycol]
-        lc = LightCurve(x, y)
+        if yerr is not None:
+            dy = hdu[yerr]
+        else:
+            dy = np.ones_like(y)
+        lc = LightCurve(x, y, dy)
     elif mode == 'kepler':
         tbl = fits.open(filename)
         hdu = tbl[1].data
@@ -303,7 +310,11 @@ def create_from_file(filename, xcol='time', ycol='flux', mode='ascii'):
         y = hdu[ycol]
         ccol = hdu['mom_centr1']
         crow = hdu['mom_centr2']
-        lc = KeplerLightCurve(x, y, ccol, crow)
+        if yerr is not None:
+            dy = hdu[yerr]
+        else:
+            dy = np.ones_like(y)
+        lc = KeplerLightCurve(x, y, dy, ccol, crow)
     return lc
 
 
@@ -397,9 +408,28 @@ def get_lc_kepler(target, quarter=None, campaign=None):
 
 def get_lc_tess(tic):
     """NEW DATA RELEASE!!!"""
+    home_dir = os.getenv('HOME')
     suffix = 'lc.fits'
-    files = find_obs(tic, suffix)
+    name = '{:016d}'.format(tic)
+    path = glob.glob('{0}/mastDownload/TESS/*{1}*'.format(home_dir, name))
+    if len(path) == 0:
+        files = find_obs(tic, suffix)
+    else:
+        files = [glob.glob('{0}/*{1}*.fits'.format(pth, name))[0] for pth in path]
     return files
+
+
+def create_from_tic(tic, mode='pdc'):
+    paths = get_lc_tess(tic)
+    x, y, dy = [], [], []
+    for p in paths:
+        lc = create_from_file(p, xcol='time', ycol=mode + 'sap_flux', yerr=mode + 'sap_flux_err', mode='fits')
+        lc = lc.normalize()
+        x = np.append(x, lc.time)
+        y = np.append(y, lc.flux)
+        dy = np.append(dy, lc.flux_err)
+    ids = x.argsort()
+    return LightCurve(x[ids], y[ids], dy[ids])
 
 
 def get_from_tess(tic, ext='.fits'):

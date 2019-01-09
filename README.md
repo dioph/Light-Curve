@@ -7,7 +7,7 @@ and [```pyke```](https://github.com/KeplerGO/pyke) packages from NASA's KeplerGO
 ### Usage
 #### Installation
 ```
-pip install --index-url https://test.pypi.org/simple/ litecurve
+    $ pip install -i https://test.pypi.org/simple/ litecurve
 ```
 #### Basic:
 ```python
